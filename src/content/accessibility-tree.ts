@@ -6,6 +6,8 @@ declare global {
     __piRefCounter?: number;
     __piSnapshotCounter?: number;
     __piLastSnapshot?: { content: string; timestamp: number };
+    __piHelpers?: typeof piHelpersImpl;
+    piHelpers?: typeof piHelpersImpl;
   }
 }
 
@@ -18,6 +20,184 @@ interface ModalState {
 if (!window.__piElementMap) window.__piElementMap = {};
 if (!window.__piRefCounter) window.__piRefCounter = 0;
 if (!window.__piSnapshotCounter) window.__piSnapshotCounter = 0;
+
+const piHelpersImpl = {
+  wait(ms: number): Promise<void> {
+    return new Promise(resolve => setTimeout(resolve, ms));
+  },
+
+  async waitForSelector(
+      selector: string,
+      options: { state?: 'visible' | 'hidden' | 'attached' | 'detached'; timeout?: number } = {}
+    ): Promise<Element | null> {
+      const { state = 'visible', timeout = 20000 } = options;
+
+      const isElementVisible = (el: Element | null): boolean => {
+        if (!el) return false;
+        const style = window.getComputedStyle(el);
+        return style.display !== 'none' && 
+               style.visibility !== 'hidden' && 
+               style.opacity !== '0' &&
+               (el as HTMLElement).offsetWidth > 0 &&
+               (el as HTMLElement).offsetHeight > 0;
+      };
+
+      const checkElement = (): Element | null => {
+        const el = document.querySelector(selector);
+        switch (state) {
+          case 'attached':
+            return el;
+          case 'detached':
+            return el ? null : document.body;
+          case 'hidden':
+            if (!el) return document.body;
+            return isElementVisible(el) ? null : el;
+          case 'visible':
+          default:
+            return isElementVisible(el) ? el : null;
+        }
+      };
+
+      return new Promise((resolve, reject) => {
+        const result = checkElement();
+        if (result) {
+          resolve(state === 'detached' || state === 'hidden' ? null : result);
+          return;
+        }
+
+        const observer = new MutationObserver(() => {
+          const result = checkElement();
+          if (result) {
+            observer.disconnect();
+            clearTimeout(timeoutId);
+            resolve(state === 'detached' || state === 'hidden' ? null : result);
+          }
+        });
+
+        const timeoutId = setTimeout(() => {
+          observer.disconnect();
+          reject(new Error(`Timeout waiting for "${selector}" to be ${state}`));
+        }, timeout);
+
+        observer.observe(document.documentElement, {
+          childList: true,
+          subtree: true,
+          attributes: true,
+          attributeFilter: ['style', 'class', 'hidden']
+        });
+      });
+    },
+
+    async waitForText(
+      text: string,
+      options: { selector?: string; timeout?: number } = {}
+    ): Promise<Element | null> {
+      const { selector, timeout = 20000 } = options;
+
+      const checkText = (): Element | null => {
+        const root = selector ? document.querySelector(selector) : document.body;
+        if (!root) return null;
+        
+        const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+        while (walker.nextNode()) {
+          if (walker.currentNode.textContent?.includes(text)) {
+            return walker.currentNode.parentElement;
+          }
+        }
+        return null;
+      };
+
+      return new Promise((resolve, reject) => {
+        const result = checkText();
+        if (result) {
+          resolve(result);
+          return;
+        }
+
+        const observer = new MutationObserver(() => {
+          const result = checkText();
+          if (result) {
+            observer.disconnect();
+            clearTimeout(timeoutId);
+            resolve(result);
+          }
+        });
+
+        const timeoutId = setTimeout(() => {
+          observer.disconnect();
+          reject(new Error(`Timeout waiting for text "${text}"`));
+        }, timeout);
+
+        observer.observe(document.documentElement, {
+          childList: true,
+          subtree: true,
+          characterData: true
+        });
+      });
+    },
+
+    async waitForHidden(selector: string, timeout = 20000): Promise<void> {
+      await piHelpersImpl.waitForSelector(selector, { state: 'hidden', timeout });
+    },
+
+    getByRole(role: string, options: { name?: string } = {}): Element | null {
+      const { name } = options;
+      
+      const implicitRoles: Record<string, string[]> = {
+        button: ['button', 'input[type="button"]', 'input[type="submit"]', 'input[type="reset"]'],
+        link: ['a[href]'],
+        textbox: ['input:not([type])', 'input[type="text"]', 'input[type="email"]', 'input[type="password"]', 'input[type="search"]', 'input[type="tel"]', 'input[type="url"]', 'textarea'],
+        checkbox: ['input[type="checkbox"]'],
+        radio: ['input[type="radio"]'],
+        combobox: ['select'],
+        heading: ['h1', 'h2', 'h3', 'h4', 'h5', 'h6'],
+        list: ['ul', 'ol'],
+        listitem: ['li'],
+        navigation: ['nav'],
+        main: ['main'],
+        banner: ['header'],
+        contentinfo: ['footer'],
+        form: ['form'],
+        img: ['img'],
+        table: ['table'],
+      };
+
+      const candidates: Element[] = [];
+      candidates.push(...document.querySelectorAll(`[role="${role}"]`));
+      
+      const implicitSelectors = implicitRoles[role];
+      if (implicitSelectors) {
+        for (const sel of implicitSelectors) {
+          candidates.push(...document.querySelectorAll(`${sel}:not([role])`));
+        }
+      }
+
+      if (!name) return candidates[0] || null;
+
+      const normalizedName = name.toLowerCase().trim();
+      for (const el of candidates) {
+        const ariaLabel = el.getAttribute('aria-label')?.toLowerCase().trim();
+        const textContent = el.textContent?.toLowerCase().trim();
+        const title = el.getAttribute('title')?.toLowerCase().trim();
+        const placeholder = el.getAttribute('placeholder')?.toLowerCase().trim();
+
+        if (ariaLabel === normalizedName || textContent === normalizedName || 
+            title === normalizedName || placeholder === normalizedName) {
+          return el;
+        }
+        if (ariaLabel?.includes(normalizedName) || textContent?.includes(normalizedName)) {
+          return el;
+        }
+      }
+
+      return null;
+    }
+};
+
+if (!window.__piHelpers) {
+  window.__piHelpers = piHelpersImpl;
+  window.piHelpers = piHelpersImpl;
+}
 
 function getElementMap() {
   return window.__piElementMap!;
@@ -764,6 +944,153 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       const result = uploadImage(message.base64, message.ref, message.coordinate, message.filename);
       sendResponse(result);
       break;
+    }
+    case "WAIT_FOR_ELEMENT": {
+      const { selector, state = 'visible', timeout = 20000 } = message;
+      const maxTimeout = Math.min(timeout, 60000);
+
+      const isElementVisible = (el: Element | null): boolean => {
+        if (!el) return false;
+        const style = window.getComputedStyle(el);
+        return style.display !== 'none' && 
+               style.visibility !== 'hidden' && 
+               style.opacity !== '0' &&
+               (el as HTMLElement).offsetWidth > 0 &&
+               (el as HTMLElement).offsetHeight > 0;
+      };
+
+      const checkElement = (): boolean => {
+        const el = document.querySelector(selector);
+        switch (state) {
+          case 'attached': return !!el;
+          case 'detached': return !el;
+          case 'hidden': return !el || !isElementVisible(el);
+          case 'visible':
+          default: return isElementVisible(el);
+        }
+      };
+
+      const startTime = Date.now();
+      
+      const waitForCondition = (): Promise<{ success: boolean; waited: number; error?: string }> => {
+        return new Promise((resolve) => {
+          if (checkElement()) {
+            resolve({ success: true, waited: Date.now() - startTime });
+            return;
+          }
+
+          const observer = new MutationObserver(() => {
+            if (checkElement()) {
+              observer.disconnect();
+              clearTimeout(timeoutId);
+              resolve({ success: true, waited: Date.now() - startTime });
+            }
+          });
+
+          const timeoutId = setTimeout(() => {
+            observer.disconnect();
+            resolve({ 
+              success: false, 
+              waited: Date.now() - startTime,
+              error: `Timeout waiting for "${selector}" to be ${state}` 
+            });
+          }, maxTimeout);
+
+          observer.observe(document.documentElement, {
+            childList: true,
+            subtree: true,
+            attributes: true,
+            attributeFilter: ['style', 'class', 'hidden', 'disabled']
+          });
+        });
+      };
+
+      waitForCondition().then((waitResult) => {
+        if (!waitResult.success) {
+          sendResponse({ 
+            error: waitResult.error, 
+            waited: waitResult.waited,
+            pageContent: "", 
+            viewport: { width: window.innerWidth, height: window.innerHeight } 
+          });
+          return;
+        }
+        const treeResult = generateAccessibilityTree("interactive", 15, undefined, true);
+        sendResponse({ ...treeResult, waited: waitResult.waited });
+      });
+      return true;
+    }
+    case "WAIT_FOR_URL": {
+      const { pattern, timeout = 20000 } = message;
+      const maxTimeout = Math.min(timeout, 60000);
+
+      const matchesPattern = (url: string): boolean => {
+        if (pattern.includes('*')) {
+          const regexPattern = pattern
+            .replace(/[.+?^${}()|[\]\\]/g, '\\$&')
+            .replace(/\*\*/g, '<<<GLOBSTAR>>>')
+            .replace(/\*/g, '[^/]*')
+            .replace(/<<<GLOBSTAR>>>/g, '.*');
+          return new RegExp(`^${regexPattern}$`).test(url);
+        }
+        return url.includes(pattern);
+      };
+
+      const startTime = Date.now();
+
+      const waitForUrl = (): Promise<{ success: boolean; waited: number; error?: string }> => {
+        return new Promise((resolve) => {
+          if (matchesPattern(window.location.href)) {
+            resolve({ success: true, waited: Date.now() - startTime });
+            return;
+          }
+
+          let resolved = false;
+          const checkUrl = () => {
+            if (resolved) return;
+            if (matchesPattern(window.location.href)) {
+              resolved = true;
+              clearInterval(intervalId);
+              clearTimeout(timeoutId);
+              window.removeEventListener('popstate', checkUrl);
+              window.removeEventListener('hashchange', checkUrl);
+              resolve({ success: true, waited: Date.now() - startTime });
+            }
+          };
+
+          const intervalId = setInterval(checkUrl, 100);
+          const timeoutId = setTimeout(() => {
+            if (resolved) return;
+            resolved = true;
+            clearInterval(intervalId);
+            window.removeEventListener('popstate', checkUrl);
+            window.removeEventListener('hashchange', checkUrl);
+            resolve({ 
+              success: false, 
+              waited: Date.now() - startTime,
+              error: `Timeout waiting for URL to match "${pattern}". Current: ${window.location.href}` 
+            });
+          }, maxTimeout);
+
+          window.addEventListener('popstate', checkUrl);
+          window.addEventListener('hashchange', checkUrl);
+        });
+      };
+
+      waitForUrl().then((waitResult) => {
+        if (!waitResult.success) {
+          sendResponse({ 
+            error: waitResult.error, 
+            waited: waitResult.waited,
+            pageContent: "", 
+            viewport: { width: window.innerWidth, height: window.innerHeight } 
+          });
+          return;
+        }
+        const treeResult = generateAccessibilityTree("interactive", 15, undefined, true);
+        sendResponse({ ...treeResult, waited: waitResult.waited });
+      });
+      return true;
     }
     default:
       return false;

@@ -159,7 +159,13 @@ function formatToolContent(result) {
   
   if (result.pageContent !== undefined) {
     const content = result.pageContent || "No content";
-    let output = content;
+    let output = '';
+    
+    if (result.waited !== undefined) {
+      output += `[Waited ${result.waited}ms]\n\n`;
+    }
+    
+    output += content;
     
     if (result.isIncremental && result.diff) {
       output += `\n--- Diff from previous snapshot ---\n${result.diff}`;
@@ -240,6 +246,21 @@ function mapToolToMessage(tool, args, tabId) {
       return { type: "EXECUTE_SCREENSHOT", ...baseMsg };
     case "javascript_tool":
       return { type: "EXECUTE_JAVASCRIPT", code: a.code, ...baseMsg };
+    case "wait_for_element":
+      return { 
+        type: "WAIT_FOR_ELEMENT", 
+        selector: a.selector,
+        state: a.state || "visible",
+        timeout: a.timeout || 20000,
+        ...baseMsg 
+      };
+    case "wait_for_url":
+      return { 
+        type: "WAIT_FOR_URL", 
+        pattern: a.pattern || a.url || a.urlContains,
+        timeout: a.timeout || 20000,
+        ...baseMsg 
+      };
     case "read_console_messages":
       return { 
         type: "READ_CONSOLE_MESSAGES", 
