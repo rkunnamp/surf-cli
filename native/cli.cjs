@@ -123,6 +123,11 @@ Config
   pi-chrome config --init       Create starter pi-chrome.json in cwd
   pi-chrome config --path       Show config file path
 
+Script Mode
+  pi-chrome --script <file>                Run workflow from JSON file
+  pi-chrome --script <file> --dry-run      Show steps without executing
+  pi-chrome --script <file> --stop-on-error  Stop on first error (default: continue)
+
 Options
   --tab-id <id>     Target specific tab
   --json            Output raw JSON response
@@ -277,6 +282,141 @@ if (args[0] === "config") {
     console.log("Create one with: pi-chrome config --init");
   }
   process.exit(0);
+}
+
+if (args.includes("--script")) {
+  const scriptIdx = args.indexOf("--script");
+  const scriptPath = args[scriptIdx + 1];
+  const dryRun = args.includes("--dry-run");
+  const stopOnError = args.includes("--stop-on-error");
+
+  const tabIdIdx = args.indexOf("--tab-id");
+  const scriptTabId = tabIdIdx !== -1 ? args[tabIdIdx + 1] : undefined;
+
+  if (!scriptPath || scriptPath.startsWith("--")) {
+    console.error("Error: --script requires a file path");
+    process.exit(1);
+  }
+
+  if (!fs.existsSync(scriptPath)) {
+    console.error(`Error: Script file not found: ${scriptPath}`);
+    process.exit(1);
+  }
+
+  let script;
+  try {
+    const content = fs.readFileSync(scriptPath, "utf8");
+    script = JSON.parse(content);
+  } catch (e) {
+    console.error(`Error: Failed to parse script: ${e.message}`);
+    process.exit(1);
+  }
+
+  if (!script.steps || !Array.isArray(script.steps)) {
+    console.error("Error: Script must have a 'steps' array");
+    process.exit(1);
+  }
+
+  const sendScriptRequest = (toolName, toolArgs = {}) => {
+    return new Promise((resolve, reject) => {
+      const sock = net.createConnection(SOCKET_PATH, () => {
+        const req = {
+          type: "tool_request",
+          method: "execute_tool",
+          params: { tool: toolName, args: toolArgs },
+          id: "cli-" + Date.now() + "-" + Math.random(),
+        };
+        if (scriptTabId) req.tabId = parseInt(scriptTabId, 10);
+        sock.write(JSON.stringify(req) + "\n");
+      });
+      let buf = "";
+      sock.on("data", (d) => {
+        buf += d.toString();
+        const lines = buf.split("\n");
+        buf = lines.pop();
+        for (const line of lines) {
+          if (!line.trim()) continue;
+          try {
+            const resp = JSON.parse(line);
+            sock.end();
+            resolve(resp);
+          } catch {
+            sock.end();
+            reject(new Error("Invalid JSON"));
+          }
+        }
+      });
+      sock.on("error", (e) => reject(e));
+      let timeoutId;
+      timeoutId = setTimeout(() => { sock.destroy(); reject(new Error("Timeout")); }, 30000);
+      sock.on("close", () => clearTimeout(timeoutId));
+    });
+  };
+
+  const runScript = async () => {
+    const total = script.steps.length;
+    const results = [];
+    let failed = 0;
+
+    console.log(`Running: ${script.name || scriptPath} (${total} steps)`);
+    if (dryRun) console.log("(dry-run mode)\n");
+    else console.log("");
+
+    for (let i = 0; i < total; i++) {
+      const step = script.steps[i];
+      const stepNum = `[${i + 1}/${total}]`;
+      const toolName = step.tool;
+      const toolArgs = step.args || {};
+
+      const argSummary = Object.entries(toolArgs)
+        .map(([k, v]) => typeof v === "string" && v.length > 40 ? `${k}="${v.slice(0, 37)}..."` : `${k}=${JSON.stringify(v)}`)
+        .join(" ");
+      const desc = argSummary ? `${toolName} ${argSummary}` : toolName;
+
+      if (dryRun) {
+        console.log(`${stepNum} ${desc}`);
+        results.push({ step: i + 1, tool: toolName, status: "skipped" });
+        continue;
+      }
+
+      process.stdout.write(`${stepNum} ${desc} ... `);
+
+      try {
+        const resp = await sendScriptRequest(toolName, toolArgs);
+        if (resp.error) {
+          const errText = resp.error.content?.[0]?.text || JSON.stringify(resp.error);
+          console.log(`FAIL`);
+          console.log(`     Error: ${errText}`);
+          results.push({ step: i + 1, tool: toolName, status: "fail", error: errText });
+          failed++;
+          if (stopOnError) break;
+        } else {
+          console.log("OK");
+          results.push({ step: i + 1, tool: toolName, status: "ok" });
+        }
+      } catch (e) {
+        console.log(`FAIL`);
+        console.log(`     Error: ${e.message}`);
+        results.push({ step: i + 1, tool: toolName, status: "fail", error: e.message });
+        failed++;
+        if (stopOnError) break;
+      }
+    }
+
+    console.log("");
+    const passed = results.filter(r => r.status === "ok").length;
+    const skipped = results.filter(r => r.status === "skipped").length;
+    if (dryRun) {
+      console.log(`Summary: ${skipped} steps would run`);
+    } else {
+      console.log(`Summary: ${passed} passed, ${failed} failed, ${total} total`);
+    }
+
+    process.exit(failed > 0 ? 1 : 0);
+  };
+
+  runScript();
+  return;
 }
 
 const parseArgs = (rawArgs) => {
