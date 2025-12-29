@@ -1112,6 +1112,29 @@ async function handleMessage(
       return { success: true, filesSet: message.files.length };
     }
 
+    case "WAIT_FOR_LOAD": {
+      if (!tabId) throw new Error("No tabId provided");
+      const result = await cdp.waitForLoad(tabId, message.timeout || 30000);
+      if (!result.success) throw new Error(result.error);
+      return { success: true, readyState: result.readyState };
+    }
+
+    case "GET_FRAMES": {
+      if (!tabId) throw new Error("No tabId provided");
+      const result = await cdp.getFrames(tabId);
+      if (!result.success) throw new Error(result.error);
+      return { success: true, frames: result.frames };
+    }
+
+    case "EVALUATE_IN_FRAME": {
+      if (!tabId) throw new Error("No tabId provided");
+      if (!message.frameId) throw new Error("No frameId provided");
+      if (!message.code) throw new Error("No code provided");
+      const result = await cdp.evaluateInFrame(tabId, message.frameId, message.code);
+      if (!result.success) throw new Error(result.error);
+      return { value: result.result };
+    }
+
     case "EXECUTE_JAVASCRIPT": {
       if (!tabId) throw new Error("No tabId provided");
       if (!message.code) throw new Error("No code provided");

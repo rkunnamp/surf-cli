@@ -44,6 +44,7 @@ const TOOLS = {
       "wait.network": { desc: "Wait for network idle", args: [], opts: { timeout: "Timeout in ms" } },
       "wait.url": { desc: "Wait for URL to match", args: [], opts: { pattern: "URL pattern to match", timeout: "Timeout in ms" } },
       "wait.dom": { desc: "Wait for DOM to stabilize", args: [], opts: { stable: "Stability window in ms (default: 100)", timeout: "Max wait time in ms" } },
+      "wait.load": { desc: "Wait for page to fully load", args: [], opts: { timeout: "Max wait time in ms (default: 30000)" } },
     }
   },
   input: {
@@ -123,6 +124,13 @@ const TOOLS = {
     desc: "File upload",
     commands: {
       "upload": { desc: "Upload file(s) to input", args: [], opts: { ref: "Element ref (e.g., e5)", files: "File path(s) comma-separated" } },
+    }
+  },
+  frame: {
+    desc: "Iframe handling",
+    commands: {
+      "frame.list": { desc: "List all frames in page", args: [] },
+      "frame.js": { desc: "Execute JS in specific frame", args: [], opts: { id: "Frame ID from frame.list", code: "JavaScript code" } },
     }
   },
 };

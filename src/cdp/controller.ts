@@ -477,6 +477,80 @@ export class CDPController {
     }
   }
 
+  async waitForLoad(tabId: number, timeout: number = 30000): Promise<{ success: boolean; readyState?: string; error?: string }> {
+    await this.ensureAttached(tabId);
+    const startTime = Date.now();
+    try {
+      while (Date.now() - startTime < timeout) {
+        const result = await this.send(tabId, "Runtime.evaluate", {
+          expression: "document.readyState",
+          returnByValue: true,
+        });
+        const readyState = result.result?.value;
+        if (readyState === "complete") {
+          return { success: true, readyState };
+        }
+        await new Promise(resolve => setTimeout(resolve, 100));
+      }
+      return { success: false, error: `Timeout waiting for page load (${timeout}ms)` };
+    } catch (e) {
+      return { success: false, error: e instanceof Error ? e.message : String(e) };
+    }
+  }
+
+  async getFrames(tabId: number): Promise<{ success: boolean; frames?: Array<{ frameId: string; url: string; name: string; parentId?: string }>; error?: string }> {
+    await this.ensureAttached(tabId);
+    try {
+      await this.send(tabId, "Page.enable");
+      const result = await this.send(tabId, "Page.getFrameTree");
+      const frames: Array<{ frameId: string; url: string; name: string; parentId?: string }> = [];
+      const extractFrames = (frame: any, parentId?: string) => {
+        frames.push({
+          frameId: frame.frame.id,
+          url: frame.frame.url,
+          name: frame.frame.name || "",
+          parentId,
+        });
+        if (frame.childFrames) {
+          for (const child of frame.childFrames) {
+            extractFrames(child, frame.frame.id);
+          }
+        }
+      };
+      extractFrames(result.frameTree);
+      return { success: true, frames };
+    } catch (e) {
+      return { success: false, error: e instanceof Error ? e.message : String(e) };
+    }
+  }
+
+  async evaluateInFrame(tabId: number, frameId: string, expression: string): Promise<{ success: boolean; result?: any; error?: string }> {
+    await this.ensureAttached(tabId);
+    try {
+      const contextResult = await this.send(tabId, "Page.createIsolatedWorld", {
+        frameId,
+        worldName: "pi-chrome-isolated",
+      });
+      const wrappedExpression = `JSON.stringify((function() { ${expression} })())`;
+      const result = await this.send(tabId, "Runtime.evaluate", {
+        expression: wrappedExpression,
+        contextId: contextResult.executionContextId,
+        returnByValue: true,
+        awaitPromise: true,
+      });
+      if (result.exceptionDetails) {
+        return { success: false, error: result.exceptionDetails.text || result.exceptionDetails.exception?.description || "Evaluation failed" };
+      }
+      try {
+        return { success: true, result: JSON.parse(result.result?.value) };
+      } catch {
+        return { success: true, result: result.result?.value };
+      }
+    } catch (e) {
+      return { success: false, error: e instanceof Error ? e.message : String(e) };
+    }
+  }
+
   getConsoleMessages(
     tabId: number,
     options?: {

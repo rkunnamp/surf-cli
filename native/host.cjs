@@ -249,7 +249,17 @@ function formatToolContent(result) {
     if (result.metrics) {
       return text(JSON.stringify(result.metrics, null, 2));
     }
+    if (result.frames) {
+      return text(JSON.stringify(result.frames, null, 2));
+    }
+    if (result.readyState) {
+      return text(`Page loaded (readyState: ${result.readyState})`);
+    }
     return text("OK");
+  }
+
+  if (result.value !== undefined) {
+    return text(typeof result.value === "string" ? result.value : JSON.stringify(result.value, null, 2));
   }
   
   return text(JSON.stringify(result));
@@ -420,6 +430,12 @@ function mapToolToMessage(tool, args, tabId) {
       return { type: "WAIT_FOR_URL", pattern: a.pattern || a.url, timeout: a.timeout, ...baseMsg };
     case "wait.dom":
       return { type: "WAIT_FOR_DOM_STABLE", stable: a.stable || 100, timeout: a.timeout || 5000, ...baseMsg };
+    case "wait.load":
+      return { type: "WAIT_FOR_LOAD", timeout: a.timeout || 30000, ...baseMsg };
+    case "frame.list":
+      return { type: "GET_FRAMES", ...baseMsg };
+    case "frame.js":
+      return { type: "EVALUATE_IN_FRAME", frameId: a.id, code: a.code, ...baseMsg };
     case "dialog.accept":
       return { type: "DIALOG_ACCEPT", text: a.text, ...baseMsg };
     case "dialog.dismiss":
