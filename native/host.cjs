@@ -686,11 +686,12 @@ function mapComputerAction(args, tabId) {
       return { type: "EXECUTE_TYPE", text, ...baseMsg };
     
     case "key": {
+      const keyValue = a.key || text;
       const repeatCount = Math.min(100, Math.max(1, a.repeat || 1));
       if (repeatCount > 1) {
-        return { type: "EXECUTE_KEY_REPEAT", key: text, repeat: repeatCount, tabId };
+        return { type: "EXECUTE_KEY_REPEAT", key: keyValue, repeat: repeatCount, tabId };
       }
-      return { type: "EXECUTE_KEY", key: text, ...baseMsg };
+      return { type: "EXECUTE_KEY", key: keyValue, ...baseMsg };
     }
     
     case "type_submit":
