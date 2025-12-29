@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 const net = require("net");
 const fs = require("fs");
+const { loadConfig, getConfigPath, createStarterConfig } = require("./config.cjs");
 
 const SOCKET_PATH = "/tmp/pi-chrome.sock";
 const args = process.argv.slice(2);
@@ -105,6 +106,11 @@ Groups`);
     console.log(`  ${name.padEnd(10)} ${group.desc.padEnd(25)} ${cmds}`);
   }
   console.log(`
+Config
+  pi-chrome config              Show current config
+  pi-chrome config --init       Create starter pi-chrome.json in cwd
+  pi-chrome config --path       Show config file path
+
 Options
   --tab-id <id>     Target specific tab
   --json            Output raw JSON response
@@ -218,6 +224,45 @@ if (args.includes("--help") || args.includes("-h")) {
 
 if (TOOLS[args[0]] && args.length === 1) {
   showGroupHelp(args[0]);
+  process.exit(0);
+}
+
+if (args[0] === "config") {
+  const configArgs = args.slice(1);
+  const hasInit = configArgs.includes("--init");
+  const hasPath = configArgs.includes("--path");
+
+  if (hasInit) {
+    const result = createStarterConfig();
+    if (result.success) {
+      console.log(`Created: ${result.path}`);
+    } else {
+      console.error(`Error: ${result.error}`);
+      console.error(`Path: ${result.path}`);
+      process.exit(1);
+    }
+    process.exit(0);
+  }
+
+  if (hasPath) {
+    loadConfig();
+    const configPath = getConfigPath();
+    if (configPath) {
+      console.log(configPath);
+    } else {
+      console.log("No config found");
+    }
+    process.exit(0);
+  }
+
+  const config = loadConfig();
+  const configPath = getConfigPath();
+  if (configPath) {
+    console.log(JSON.stringify(config, null, 2));
+  } else {
+    console.log("No config found");
+    console.log("Create one with: pi-chrome config --init");
+  }
   process.exit(0);
 }
 
