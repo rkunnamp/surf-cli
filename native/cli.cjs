@@ -43,6 +43,7 @@ const TOOLS = {
       "wait.element": { desc: "Wait for element to appear", args: [], opts: { selector: "CSS selector", timeout: "Timeout in ms" } },
       "wait.network": { desc: "Wait for network idle", args: [], opts: { timeout: "Timeout in ms" } },
       "wait.url": { desc: "Wait for URL to match", args: [], opts: { pattern: "URL pattern to match", timeout: "Timeout in ms" } },
+      "wait.dom": { desc: "Wait for DOM to stabilize", args: [], opts: { stable: "Stability window in ms (default: 100)", timeout: "Max wait time in ms" } },
     }
   },
   input: {
@@ -86,6 +87,14 @@ const TOOLS = {
     desc: "Smoke testing",
     commands: {
       "smoke": { desc: "Run smoke tests on URLs", args: [], opts: { urls: "URLs to test (space-separated)", routes: "Route group from config (future)", screenshot: "Directory to save screenshots", "fail-fast": "Stop on first error" } },
+    }
+  },
+  dialog: {
+    desc: "Browser dialog handling",
+    commands: {
+      "dialog.accept": { desc: "Accept current dialog", args: [], opts: { text: "Text for prompt input" } },
+      "dialog.dismiss": { desc: "Dismiss current dialog", args: [] },
+      "dialog.info": { desc: "Get current dialog info", args: [] },
     }
   },
 };

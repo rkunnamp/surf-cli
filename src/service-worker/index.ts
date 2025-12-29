@@ -982,6 +982,60 @@ async function handleMessage(
       }
     }
 
+    case "WAIT_FOR_DOM_STABLE": {
+      if (!tabId) throw new Error("No tabId provided");
+      
+      try {
+        await chrome.tabs.sendMessage(tabId, { type: "HIDE_FOR_TOOL_USE" }, { frameId: 0 });
+      } catch (e) {}
+      await new Promise(resolve => setTimeout(resolve, 50));
+      
+      try {
+        const result = await chrome.tabs.sendMessage(tabId, {
+          type: "WAIT_FOR_DOM_STABLE",
+          stable: message.stable || 100,
+          timeout: message.timeout || 5000,
+        }, { frameId: 0 });
+        return result;
+      } catch (err) {
+        return { 
+          error: "Content script not loaded. Try refreshing the page.",
+          pageContent: "",
+          viewport: { width: 0, height: 0 }
+        };
+      } finally {
+        try {
+          await chrome.tabs.sendMessage(tabId, { type: "SHOW_AFTER_TOOL_USE" });
+        } catch (e) {}
+      }
+    }
+
+    case "DIALOG_ACCEPT": {
+      if (!tabId) throw new Error("No tabId provided");
+      const result = await cdp.handleDialog(tabId, true, message.text);
+      return result;
+    }
+
+    case "DIALOG_DISMISS": {
+      if (!tabId) throw new Error("No tabId provided");
+      const result = await cdp.handleDialog(tabId, false);
+      return result;
+    }
+
+    case "DIALOG_INFO": {
+      if (!tabId) throw new Error("No tabId provided");
+      const dialog = cdp.getDialogInfo(tabId);
+      if (!dialog) {
+        return { hasDialog: false };
+      }
+      return {
+        hasDialog: true,
+        type: dialog.type,
+        message: dialog.message,
+        defaultPrompt: dialog.defaultPrompt,
+      };
+    }
+
     case "EXECUTE_JAVASCRIPT": {
       if (!tabId) throw new Error("No tabId provided");
       if (!message.code) throw new Error("No code provided");
@@ -1346,13 +1400,14 @@ chrome.runtime.onInstalled.addListener((details) => {
 
 initNativeMessaging(async (msg) => {
   let tabId = msg.tabId;
-  if (tabId) {
+  const isDialogCommand = msg.type?.startsWith("DIALOG_");
+  if (tabId && !isDialogCommand) {
     try {
       await chrome.tabs.get(tabId);
     } catch {
       throw new Error(`Invalid tab ID: ${tabId}`);
     }
-  } else {
+  } else if (!tabId) {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     tabId = tab?.id;
   }

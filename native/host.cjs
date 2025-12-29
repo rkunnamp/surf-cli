@@ -415,6 +415,14 @@ function mapToolToMessage(tool, args, tabId) {
       return { type: "WAIT_FOR_NETWORK_IDLE", timeout: a.timeout, ...baseMsg };
     case "wait.url":
       return { type: "WAIT_FOR_URL", pattern: a.pattern || a.url, timeout: a.timeout, ...baseMsg };
+    case "wait.dom":
+      return { type: "WAIT_FOR_DOM_STABLE", stable: a.stable || 100, timeout: a.timeout || 5000, ...baseMsg };
+    case "dialog.accept":
+      return { type: "DIALOG_ACCEPT", text: a.text, ...baseMsg };
+    case "dialog.dismiss":
+      return { type: "DIALOG_DISMISS", ...baseMsg };
+    case "dialog.info":
+      return { type: "DIALOG_INFO", ...baseMsg };
     case "page.read":
       return { type: "READ_PAGE", options: { filter: a.filter || "interactive", refId: a.ref }, ...baseMsg };
     case "page.text":

@@ -18,6 +18,13 @@ interface NetworkRequest {
   timestamp: number;
 }
 
+interface PendingDialog {
+  type: "alert" | "confirm" | "prompt" | "beforeunload";
+  message: string;
+  defaultPrompt?: string;
+  timestamp: number;
+}
+
 type ConsoleEventCallback = (event: ConsoleMessage) => void;
 type NetworkEventCallback = (event: {
   method: string;
@@ -83,6 +90,7 @@ export class CDPController {
   private consoleCallbacks: Map<number, Map<number, ConsoleEventCallback>> = new Map();
   private networkCallbacks: Map<number, Map<number, NetworkEventCallback>> = new Map();
   private networkRequestStartTimes: Map<string, number> = new Map();
+  private pendingDialogs: Map<number, PendingDialog> = new Map();
   private static debuggerListenerRegistered = false;
 
   async attach(tabId: number): Promise<void> {
@@ -103,6 +111,10 @@ export class CDPController {
     this.setupEventListener();
     this.consoleMessages.set(tabId, []);
     this.networkRequests.set(tabId, []);
+
+    try {
+      await this.send(tabId, "Page.enable");
+    } catch (e) {}
   }
 
   async detach(tabId: number): Promise<void> {
@@ -118,6 +130,7 @@ export class CDPController {
       this.networkRequests.delete(tabId);
       this.consoleCallbacks.delete(tabId);
       this.networkCallbacks.delete(tabId);
+      this.pendingDialogs.delete(tabId);
     }
   }
 
@@ -155,6 +168,12 @@ export class CDPController {
         break;
       case "Network.loadingFailed":
         this.handleNetworkFailed(tabId, params);
+        break;
+      case "Page.javascriptDialogOpening":
+        this.handleDialogOpening(tabId, params);
+        break;
+      case "Page.javascriptDialogClosed":
+        this.pendingDialogs.delete(tabId);
         break;
     }
   }
@@ -290,6 +309,15 @@ export class CDPController {
     }
   }
 
+  private handleDialogOpening(tabId: number, params: any): void {
+    this.pendingDialogs.set(tabId, {
+      type: params.type,
+      message: params.message,
+      defaultPrompt: params.defaultPrompt,
+      timestamp: Date.now(),
+    });
+  }
+
   async enableConsoleTracking(tabId: number): Promise<void> {
     await this.ensureAttached(tabId);
     try {
@@ -302,6 +330,30 @@ export class CDPController {
     try {
       await this.send(tabId, "Network.enable", { maxPostDataSize: 65536 });
     } catch (e) {}
+  }
+
+  async enablePageEvents(tabId: number): Promise<void> {
+    await this.ensureAttached(tabId);
+    try {
+      await this.send(tabId, "Page.enable");
+    } catch (e) {}
+  }
+
+  async handleDialog(tabId: number, accept: boolean, promptText?: string): Promise<{ success: boolean; error?: string }> {
+    try {
+      await this.send(tabId, "Page.handleJavaScriptDialog", {
+        accept,
+        promptText,
+      });
+      this.pendingDialogs.delete(tabId);
+      return { success: true };
+    } catch (e) {
+      return { success: false, error: e instanceof Error ? e.message : String(e) };
+    }
+  }
+
+  getDialogInfo(tabId: number): PendingDialog | null {
+    return this.pendingDialogs.get(tabId) || null;
   }
 
   getConsoleMessages(

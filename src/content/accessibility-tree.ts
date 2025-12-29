@@ -1612,6 +1612,72 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       });
       return true;
     }
+    case "WAIT_FOR_DOM_STABLE": {
+      const { stable = 100, timeout = 5000 } = message;
+      const maxTimeout = Math.min(timeout, 30000);
+      const startTime = Date.now();
+
+      const waitForStability = (): Promise<{ success: boolean; waited: number; error?: string }> => {
+        return new Promise((resolve) => {
+          let lastMutationTime = Date.now();
+          let resolved = false;
+
+          const checkStability = () => {
+            if (resolved) return;
+            const timeSinceLastMutation = Date.now() - lastMutationTime;
+            if (timeSinceLastMutation >= stable) {
+              resolved = true;
+              observer.disconnect();
+              clearTimeout(timeoutId);
+              clearInterval(checkInterval);
+              resolve({ success: true, waited: Date.now() - startTime });
+            }
+          };
+
+          const observer = new MutationObserver(() => {
+            lastMutationTime = Date.now();
+          });
+
+          const timeoutId = setTimeout(() => {
+            if (resolved) return;
+            resolved = true;
+            observer.disconnect();
+            clearInterval(checkInterval);
+            resolve({
+              success: false,
+              waited: Date.now() - startTime,
+              error: `Timeout: DOM did not stabilize within ${maxTimeout}ms`
+            });
+          }, maxTimeout);
+
+          const checkInterval = setInterval(checkStability, Math.max(10, Math.min(50, stable / 2)));
+
+          observer.observe(document.documentElement, {
+            childList: true,
+            subtree: true,
+            attributes: true,
+            characterData: true,
+          });
+
+          checkStability();
+        });
+      };
+
+      waitForStability().then((waitResult) => {
+        if (!waitResult.success) {
+          sendResponse({
+            error: waitResult.error,
+            waited: waitResult.waited,
+            pageContent: "",
+            viewport: { width: window.innerWidth, height: window.innerHeight }
+          });
+          return;
+        }
+        const treeResult = generateAccessibilityTree("interactive", 15, undefined, true);
+        sendResponse({ ...treeResult, waited: waitResult.waited });
+      });
+      return true;
+    }
     case "WAIT_FOR_NETWORK_IDLE": {
       const { timeout = 10000 } = message;
       const maxTimeout = Math.min(timeout, 60000);
