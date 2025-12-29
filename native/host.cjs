@@ -427,6 +427,15 @@ function mapToolToMessage(tool, args, tabId) {
         return { type: "WAIT_FOR_ELEMENT", selector: a.selector, timeout: a.timeout || 30000, ...baseMsg };
       }
       return { type: "ERROR", error: "health requires --url or --selector" };
+    case "smoke":
+      return { 
+        type: "SMOKE_TEST", 
+        urls: a.urls || [],
+        routes: a.routes,
+        savePath: a.screenshot,
+        failFast: a["fail-fast"] || false,
+        ...baseMsg 
+      };
     default:
       return null;
   }
@@ -741,6 +750,25 @@ function processInput() {
               }
             });
             setTimeout(() => writeMessage({ type: "EXECUTE_SCREENSHOT", tabId, id: screenshotId }), 200);
+          } else if (msg.results && msg.savePath) {
+            try {
+              const dir = msg.savePath;
+              if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+              
+              for (const result of msg.results) {
+                if (result.screenshotBase64 && result.hostname) {
+                  const ssPath = path.join(dir, `${result.hostname}.png`);
+                  fs.writeFileSync(ssPath, Buffer.from(result.screenshotBase64, "base64"));
+                  result.screenshot = ssPath;
+                  delete result.screenshotBase64;
+                  delete result.hostname;
+                }
+              }
+              delete msg.savePath;
+              sendToolResponse(socket, originalId, msg, null);
+            } catch (e) {
+              sendToolResponse(socket, originalId, null, `Failed to save screenshots: ${e.message}`);
+            }
           } else {
             const isPureError = msg.error && !msg.success && !msg.base64 && 
                                 !msg.pageContent && !msg.tabs && !msg.text &&

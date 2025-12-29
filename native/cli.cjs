@@ -82,6 +82,12 @@ const TOOLS = {
       "health": { desc: "Wait for URL or element", args: [], opts: { url: "URL to check (expects 200)", selector: "CSS selector to wait for", expect: "Expected status code (default: 200)", timeout: "Timeout in ms (default: 30000)" } },
     }
   },
+  smoke: {
+    desc: "Smoke testing",
+    commands: {
+      "smoke": { desc: "Run smoke tests on URLs", args: [], opts: { urls: "URLs to test (space-separated)", routes: "Route group from config (future)", screenshot: "Directory to save screenshots", "fail-fast": "Stop on first error" } },
+    }
+  },
 };
 
 const ALL_SOCKET_TOOLS = [
@@ -93,7 +99,7 @@ const ALL_SOCKET_TOOLS = [
   "tabs_list_named", "tabs_unregister", "list_tabs", "new_tab", "switch_tab", "close_tab",
   "left_click", "right_click", "double_click", "triple_click", "type", "key", "type_submit",
   "click_type", "click_type_submit", "scroll", "scroll_to", "hover", "left_click_drag",
-  "drag", "wait", "zoom", "computer",
+  "drag", "wait", "zoom", "computer", "smoke",
 ];
 
 const showMainHelp = () => {
@@ -298,13 +304,40 @@ const parseArgs = (rawArgs) => {
   return result;
 };
 
-const { positional, options } = parseArgs(args);
-const tool = positional[0];
-const firstArg = positional[1];
+let { positional, options } = parseArgs(args);
+let tool = positional[0];
+let firstArg = positional[1];
 
 if (!tool) {
   console.error("Error: No tool specified");
   process.exit(1);
+}
+
+if (tool === "smoke") {
+  const smokeUrls = [];
+  const smokeArgs = args.slice(1);
+  for (let i = 0; i < smokeArgs.length; i++) {
+    const arg = smokeArgs[i];
+    if (arg === "--urls") {
+      i++;
+      while (i < smokeArgs.length && !smokeArgs[i].startsWith("--")) {
+        smokeUrls.push(smokeArgs[i]);
+        i++;
+      }
+      i--;
+    } else if (arg === "--routes") {
+      options.routes = smokeArgs[i + 1];
+      i++;
+    } else if (arg === "--screenshot") {
+      options.screenshot = smokeArgs[i + 1];
+      i++;
+    } else if (arg === "--fail-fast") {
+      options["fail-fast"] = true;
+    }
+  }
+  if (smokeUrls.length > 0) {
+    options.urls = smokeUrls;
+  }
 }
 
 const PRIMARY_ARG_MAP = {
@@ -469,11 +502,12 @@ const socket = net.createConnection(SOCKET_PATH, () => {
   socket.write(JSON.stringify(request) + "\n");
 });
 
+const requestTimeout = tool === "smoke" ? 300000 : 30000;
 const timeout = setTimeout(() => {
-  console.error("Error: Request timed out (30s)");
+  console.error(`Error: Request timed out (${requestTimeout / 1000}s)`);
   socket.destroy();
   process.exit(1);
-}, 30000);
+}, requestTimeout);
 
 let buffer = "";
 
@@ -591,6 +625,29 @@ async function handleResponse(response) {
       }
     } else {
       console.log(JSON.stringify(data, null, 2));
+    }
+  } else if (tool === "smoke" && data?.results) {
+    const results = data.results;
+    const summary = data.summary || { pass: 0, fail: 0, total: results.length };
+    
+    for (const r of results) {
+      const status = r.status === "pass" ? "PASS" : "FAIL";
+      const timeStr = r.time ? ` (${r.time}ms)` : "";
+      const ssStr = r.screenshot ? ` [${r.screenshot}]` : "";
+      console.log(`[${status}] ${r.url}${timeStr}${ssStr}`);
+      if (r.errors && r.errors.length > 0) {
+        for (const err of r.errors) {
+          console.log(`  - ${err}`);
+        }
+      }
+    }
+    
+    console.log("");
+    console.log(`Summary: ${summary.pass} passed, ${summary.fail} failed, ${summary.total} total`);
+    
+    if (summary.fail > 0) {
+      socket.end();
+      process.exit(1);
     }
   } else if (typeof data === "string") {
     console.log(data);

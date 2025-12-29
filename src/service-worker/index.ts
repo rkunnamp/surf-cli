@@ -780,6 +780,116 @@ async function handleMessage(
       };
     }
 
+    case "SMOKE_TEST": {
+      const urls: string[] = message.urls || [];
+      const captureScreenshots: boolean = message.savePath !== undefined;
+      const failFast: boolean = message.failFast || false;
+      
+      if (urls.length === 0) {
+        return { error: "No URLs provided for smoke test" };
+      }
+
+      const results: Array<{
+        url: string;
+        status: "pass" | "fail";
+        time: number;
+        errors: string[];
+        screenshotBase64?: string;
+        hostname?: string;
+      }> = [];
+
+      let pass = 0;
+      let fail = 0;
+
+      for (const url of urls) {
+        const startTime = Date.now();
+        const errors: string[] = [];
+        let screenshotBase64: string | undefined;
+        let hostname: string | undefined;
+        let testTabId: number | undefined;
+
+        try {
+          hostname = new URL(url).hostname.replace(/[^a-zA-Z0-9.-]/g, "_");
+          const testTab = await chrome.tabs.create({ url, active: false });
+          if (!testTab.id) throw new Error("Failed to create tab");
+          testTabId = testTab.id;
+
+          try {
+            await cdp.enableConsoleTracking(testTabId);
+          } catch (e) {}
+
+          await new Promise<void>((resolve) => {
+            const onComplete = (details: chrome.webNavigation.WebNavigationFramedCallbackDetails) => {
+              if (details.tabId === testTabId && details.frameId === 0) {
+                chrome.webNavigation.onCompleted.removeListener(onComplete);
+                chrome.webNavigation.onErrorOccurred.removeListener(onError);
+                resolve();
+              }
+            };
+            const onError = (details: chrome.webNavigation.WebNavigationFramedErrorCallbackDetails) => {
+              if (details.tabId === testTabId && details.frameId === 0) {
+                chrome.webNavigation.onCompleted.removeListener(onComplete);
+                chrome.webNavigation.onErrorOccurred.removeListener(onError);
+                errors.push(`Navigation error: ${details.error}`);
+                resolve();
+              }
+            };
+            chrome.webNavigation.onCompleted.addListener(onComplete);
+            chrome.webNavigation.onErrorOccurred.addListener(onError);
+            setTimeout(() => {
+              chrome.webNavigation.onCompleted.removeListener(onComplete);
+              chrome.webNavigation.onErrorOccurred.removeListener(onError);
+              errors.push("Navigation timeout (30s)");
+              resolve();
+            }, 30000);
+          });
+
+          await new Promise(r => setTimeout(r, 2000));
+
+          const consoleMessages = cdp.getConsoleMessages(testTabId, { onlyErrors: true, limit: 50 });
+          for (const msg of consoleMessages) {
+            errors.push(`[${msg.type}] ${msg.text}`);
+          }
+
+          if (captureScreenshots) {
+            try {
+              const screenshot = await cdp.captureScreenshot(testTabId);
+              screenshotBase64 = screenshot.base64;
+            } catch (e) {}
+          }
+        } catch (e) {
+          errors.push(e instanceof Error ? e.message : String(e));
+        } finally {
+          if (testTabId) {
+            try { await chrome.tabs.remove(testTabId); } catch {}
+          }
+        }
+
+        const elapsed = Date.now() - startTime;
+        const status = errors.length === 0 ? "pass" : "fail";
+        if (status === "pass") pass++;
+        else fail++;
+
+        results.push({
+          url,
+          status,
+          time: elapsed,
+          errors,
+          ...(screenshotBase64 && { screenshotBase64, hostname }),
+        });
+
+        if (failFast && status === "fail") {
+          break;
+        }
+      }
+
+      return {
+        results,
+        summary: { pass, fail, total: results.length },
+        savePath: message.savePath,
+      };
+    }
+
     case "WAIT_FOR_ELEMENT": {
       if (!tabId) throw new Error("No tabId provided");
       if (!message.selector) throw new Error("No selector provided");
