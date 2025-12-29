@@ -445,7 +445,8 @@ function mapToolToMessage(tool, args, tabId) {
     case "emulate.network":
       return { type: "EMULATE_NETWORK", preset: a.preset, ...baseMsg };
     case "emulate.cpu":
-      return { type: "EMULATE_CPU", rate: parseFloat(a.rate) || 1, ...baseMsg };
+      const cpuRate = parseFloat(a.rate);
+      return { type: "EMULATE_CPU", rate: isNaN(cpuRate) ? 1 : cpuRate, ...baseMsg };
     case "emulate.geo":
       if (a.clear) {
         return { type: "EMULATE_GEO", clear: true, ...baseMsg };
