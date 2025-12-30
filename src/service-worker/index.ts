@@ -176,7 +176,6 @@ async function captureFullPage(tabId: number, maxHeight: number): Promise<{ base
   return { base64, width: canvasWidth, height: canvasHeight };
 }
 
-const tabGroups = new Map<number, number>();
 const navigationResolvers = new Map<number, () => void>();
 const tabNameRegistry = new Map<string, number>();
 
@@ -202,32 +201,8 @@ chrome.webNavigation.onErrorOccurred.addListener((details) => {
 
 
 
-async function ensureTabGroup(tabId: number): Promise<void> {
-  try {
-    const tab = await chrome.tabs.get(tabId);
-    
-    if (tab.groupId !== chrome.tabGroups.TAB_GROUP_ID_NONE) {
-      tabGroups.set(tabId, tab.groupId);
-      return;
-    }
-    
-    const groupId = await chrome.tabs.group({ tabIds: [tabId] });
-    await chrome.tabGroups.update(groupId, {
-      title: "Surf",
-      color: "blue",
-      collapsed: false,
-    });
-    tabGroups.set(tabId, groupId);
-  } catch (e) {
-    debugLog("Could not create tab group:", e);
-  }
-}
-
-
-
 chrome.tabs.onRemoved.addListener((tabId) => {
   cdp.detach(tabId);
-  tabGroups.delete(tabId);
   for (const [name, id] of tabNameRegistry) {
     if (id === tabId) {
       tabNameRegistry.delete(name);
