@@ -5,7 +5,7 @@ app.innerHTML = `
   
   <section style="margin-bottom: 2rem;">
     <h2 style="font-size: 1.125rem; font-weight: 600; margin-bottom: 1rem;">API Keys</h2>
-    <p style="color: #666; margin-bottom: 1rem;">
+    <p class="muted" style="margin-bottom: 1rem;">
       API keys are stored locally in your browser and never sent to any server except the provider's API.
     </p>
     <button id="clear-keys" style="padding: 0.5rem 1rem; background: #dc2626; color: white; border: none; border-radius: 0.375rem; cursor: pointer;">
@@ -27,14 +27,14 @@ app.innerHTML = `
       <span>Heartbeat interval (seconds):</span>
       <input type="number" id="heartbeat-interval" min="5" max="60" value="10" style="width: 4rem; padding: 0.25rem 0.5rem; border: 1px solid #ccc; border-radius: 0.25rem;" />
     </label>
-    <p style="color: #666; font-size: 0.875rem; margin-top: 0.5rem;">
+    <p class="muted" style="font-size: 0.875rem; margin-top: 0.5rem;">
       How often the static indicator checks if Surf is still active (5-60 seconds).
     </p>
   </section>
   
   <section style="margin-bottom: 2rem;">
     <h2 style="font-size: 1.125rem; font-weight: 600; margin-bottom: 1rem;">About</h2>
-    <p style="color: #666;">
+    <p class="muted">
       Surf v${chrome.runtime.getManifest().version}
     </p>
   </section>
