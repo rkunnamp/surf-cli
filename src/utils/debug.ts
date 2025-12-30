@@ -7,7 +7,7 @@ chrome.storage.local.get("debugMode").then(({ debugMode: stored }) => {
   initialized = true;
   if (debugMode) {
     for (const args of pendingLogs) {
-      console.log("[Pi Agent]", ...args);
+      console.log("[Surf]", ...args);
     }
   }
   pendingLogs.length = 0;
@@ -25,7 +25,7 @@ export function debugLog(...args: unknown[]): void {
     return;
   }
   if (debugMode) {
-    console.log("[Pi Agent]", ...args);
+    console.log("[Surf]", ...args);
   }
 }
 

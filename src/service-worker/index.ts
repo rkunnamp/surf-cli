@@ -222,7 +222,7 @@ async function ensureTabGroup(tabId: number): Promise<void> {
     
     const groupId = await chrome.tabs.group({ tabIds: [tabId] });
     await chrome.tabGroups.update(groupId, {
-      title: "Pi Agent",
+      title: "Surf",
       color: "blue",
       collapsed: false,
     });
@@ -1569,7 +1569,7 @@ async function handleMessage(
       } catch (err) {
         return { 
           auth: null, 
-          hint: "Native host not connected. Make sure pi-chrome native host is installed." 
+          hint: "Native host not connected. Make sure surf native host is installed." 
         };
       }
     }
@@ -1690,7 +1690,7 @@ async function handleMessage(
 
     case "TAB_GROUP_CREATE": {
       const tabIds = [...(message.tabIds || [])];
-      const name = message.name || "Pi Agent";
+      const name = message.name || "Surf";
       const validColors = ['grey', 'blue', 'red', 'yellow', 'green', 'pink', 'purple', 'cyan', 'orange'];
       const color = validColors.includes(message.color) ? message.color : 'blue';
       

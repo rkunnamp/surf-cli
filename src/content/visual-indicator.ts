@@ -114,7 +114,7 @@ function createStopButton(): HTMLDivElement {
     <svg width="16" height="16" viewBox="0 0 256 256" fill="currentColor" style="margin-right: 12px; vertical-align: middle;">
       <path d="M128,20A108,108,0,1,0,236,128,108.12,108.12,0,0,0,128,20Zm0,192a84,84,0,1,1,84-84A84.09,84.09,0,0,1,128,212Zm40-112v56a12,12,0,0,1-12,12H100a12,12,0,0,1-12-12V100a12,12,0,0,1,12-12h56A12,12,0,0,1,168,100Z"></path>
     </svg>
-    <span style="vertical-align: middle;">Stop Pi Agent</span>
+    <span style="vertical-align: middle;">Stop Surf</span>
   `;
   button.style.cssText = `
     position: relative;
@@ -166,7 +166,7 @@ function createStaticIndicator(): HTMLDivElement {
       <circle cx="8" cy="8" r="7" fill="rgb(${PI_COLOR})"/>
       <text x="8" y="11" font-size="9" fill="white" text-anchor="middle" font-weight="bold">π</text>
     </svg>
-    <span style="color: #141413; font-size: 14px;">Pi Agent is active in this tab group</span>
+    <span style="color: #141413; font-size: 14px;">Surf is active in this tab group</span>
     <div style="width: 0.5px; height: 32px; background: rgba(31, 30, 29, 0.15); margin: 0 8px;"></div>
     <button id="pi-static-chat-button" style="display: inline-flex; align-items: center; justify-content: center; padding: 6px; background: transparent; border: none; cursor: pointer; width: 32px; height: 32px; border-radius: 8px; transition: background 0.2s;">
       <svg width="20" height="20" viewBox="0 0 20 20" fill="#141413">

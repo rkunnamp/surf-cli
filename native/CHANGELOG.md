@@ -1,6 +1,6 @@
 # Changelog
 
-All notable changes to pi-chrome CLI will be documented in this file.
+All notable changes to surf CLI will be documented in this file.
 
 ## [2.0.0] - 2025-12-27
 

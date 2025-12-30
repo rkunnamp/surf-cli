@@ -1,26 +1,28 @@
-# Pi Chrome Extension
+# Surf
 
-Browser automation via Chrome extension with CLI and socket API.
+Zero-setup browser automation. Install the extension, run commands.
+
+```bash
+surf go "https://example.com"
+surf read
+surf click e5
+surf snap
+```
 
 ## Features
 
-- **CLI**: `pi-chrome` command for terminal-based browser control
-- **Socket API**: JSON protocol via Unix socket for agent integration
-- **50+ Tools**: Tabs, scrolling, input, screenshots, JavaScript execution
-- **Page Understanding**: Accessibility tree extraction with element refs
+- **CLI-first**: `surf` command for terminal-based browser control
+- **Zero config**: Just install the extension and go
+- **50+ commands**: Navigation, tabs, input, screenshots, cookies, and more
+- **Element refs**: Stable identifiers from accessibility tree (`e1`, `e2`, `e3`...)
 - **CDP-based**: Bypasses CSP restrictions, works on any page
-- **Named Tabs**: Register tabs with aliases for easy switching
-- **Config Files**: Project-specific settings via `pi-chrome.json`
-- **Smoke Tests**: Multi-URL testing with screenshot capture
-- **Script Mode**: Run command sequences from JSON files
-- **DevTools Streaming**: Real-time console and network monitoring
+- **Socket API**: JSON protocol for agent integration
 
 ## Installation
 
 ```bash
 npm install
 npm run build
-npm link              # Makes 'pi-chrome' CLI available globally
 ```
 
 ### Load Extension in Chrome
@@ -32,301 +34,139 @@ npm link              # Makes 'pi-chrome' CLI available globally
 ### Setup Native Host
 
 ```bash
-cd native
-./install.sh          # Install native messaging manifest
+npm run install:native <extension-id>
+node native/host.cjs
 ```
 
-The extension auto-starts the socket server at `/tmp/pi-chrome.sock`.
+The host creates a socket at `/tmp/surf.sock`.
 
 ## CLI Usage
 
 ```bash
-pi-chrome <tool> [args] [options]
-pi-chrome --help                    # Main help
-pi-chrome <group>                   # Group help (tab, scroll, page, wait)
-pi-chrome <tool> --help             # Tool help
-pi-chrome --list                    # List all 50+ tools
+surf <command> [args] [options]
+surf --help                    # Basic help
+surf --help-full               # All commands
+surf <command> --help          # Command details
+surf --find <query>            # Search commands
 ```
 
-### Global Options
+### Navigation
 
 ```bash
---tab-id <id>         Target specific tab
---json                Output raw JSON response
---auto-capture        On error: capture screenshot + console to /tmp
+surf go "https://example.com"
+surf back
+surf forward
+surf tab.reload --hard
+```
+
+### Page Interaction
+
+```bash
+surf read                           # Get interactive elements
+surf click e5                       # Click by element ref
+surf click --selector ".btn"        # Click by CSS selector
+surf click 100 200                  # Click by coordinates
+surf type "hello" --submit          # Type and press Enter
+surf key Escape                     # Press key
+```
+
+### Screenshots
+
+```bash
+surf screenshot --output /tmp/shot.png
+surf screenshot --annotate --output /tmp/labeled.png
+surf screenshot --fullpage --output /tmp/full.png
+surf snap                           # Auto-saves to /tmp
 ```
 
 ### Tabs
 
 ```bash
-pi-chrome tab.list
-pi-chrome tab.new "https://google.com"
-pi-chrome tab.switch 12345
-pi-chrome tab.close 12345
+surf tab.list
+surf tab.new "https://example.com"
+surf tab.switch 123
+surf tab.close 123
+surf tab.group --name "Work" --color blue
+surf tab.name "dashboard"           # Name current tab
+surf tab.switch "dashboard"         # Switch by name
 ```
 
-### Named Tab Aliases
-
-Register tabs with names for easy reference:
+### Cookies
 
 ```bash
-pi-chrome tab.name myapp            # Name current tab "myapp"
-pi-chrome tab.named                 # List all named tabs
-pi-chrome tab.switch myapp          # Switch by name
-pi-chrome tab.close myapp           # Close by name
-pi-chrome tab.unname myapp          # Remove the alias
+surf cookie.list
+surf cookie.get --name "session"
+surf cookie.set --name "foo" --value "bar"
+surf cookie.clear --all
 ```
 
-### Navigation & Screenshots
+### Other
 
 ```bash
-pi-chrome navigate "https://example.com"
-pi-chrome screenshot --output /tmp/shot.png
-```
-
-### Scrolling
-
-```bash
-pi-chrome scroll.top
-pi-chrome scroll.bottom
-pi-chrome scroll.info
-pi-chrome scroll.to --ref "section_1"
-```
-
-### Input
-
-```bash
-pi-chrome click --ref "btn_1"
-pi-chrome click --x 100 --y 200
-pi-chrome type --text "hello"
-pi-chrome smart_type --selector "#input" --text "hello" --submit
-pi-chrome key Enter
-pi-chrome key "cmd+a"
-pi-chrome hover --x 100 --y 200
-
-# Method flag: switch between CDP (real events) and JS (DOM manipulation)
-pi-chrome type --text "hello" --selector "#input" --method js   # Uses smart_type
-pi-chrome click --selector ".btn" --method js                   # Uses JS click()
-```
-
-### Page Inspection
-
-```bash
-pi-chrome page.read                 # Accessibility tree
-pi-chrome page.text                 # Extract all text
-pi-chrome page.state                # Modals, loading state
+surf zoom 1.5                       # Set zoom to 150%
+surf resize --width 1280 --height 720
+surf wait 2                         # Wait 2 seconds
+surf js "return document.title"     # Execute JavaScript
+surf search "login"                 # Find text in page
 ```
 
 ### Waiting
 
 ```bash
-pi-chrome wait 2                    # Wait 2 seconds
-pi-chrome wait.element --selector ".loaded"
-pi-chrome wait.network              # Wait for network idle
-pi-chrome wait.url --pattern "*/success*"
-```
-
-### JavaScript
-
-```bash
-pi-chrome js "return document.title"
-pi-chrome js "return document.querySelector('#btn').textContent"
-```
-
-### Health Checks
-
-Wait for URL or element with retry:
-
-```bash
-pi-chrome health --url "http://localhost:3000"              # Wait for 200
-pi-chrome health --url "http://localhost:3000" --expect 201 # Expect specific status
-pi-chrome health --selector ".app-ready"                    # Wait for element
-pi-chrome health --url "..." --timeout 60000                # Custom timeout
-```
-
-### Smoke Tests
-
-Test multiple URLs, capture screenshots, check for console errors:
-
-```bash
-pi-chrome smoke --urls "http://localhost:3000" "http://localhost:3000/about"
-pi-chrome smoke --urls "..." --screenshot /tmp/smoke        # Save screenshots
-pi-chrome smoke --urls "..." --fail-fast                    # Stop on first failure
-pi-chrome smoke --urls "..." --json                         # JSON output
-```
-
-Output:
-```
-[PASS] http://localhost:3000 (1234ms) [/tmp/smoke/localhost.png]
-[FAIL] http://localhost:3000/broken (2345ms)
-  - [error] TypeError: Cannot read property 'foo' of undefined
-
-Summary: 1 passed, 1 failed, 2 total
-```
-
-### DevTools Streaming
-
-Real-time console and network monitoring (Ctrl+C to stop):
-
-```bash
-pi-chrome console --stream                    # All console output
-pi-chrome console --stream --level error      # Errors only
-pi-chrome network --stream                    # All network requests
-pi-chrome network --stream --filter "api/"    # Filter by URL pattern
-```
-
-Output:
-```
-[console] [error] 12:34:56.789 TypeError: Cannot read property 'foo' of undefined
-[network] GET https://api.example.com/users 200 (123ms)
-```
-
-### Config File
-
-Create project-specific settings:
-
-```bash
-pi-chrome config --init             # Create pi-chrome.json in current directory
-pi-chrome config                    # Show current config
-pi-chrome config --path             # Show config file location
-```
-
-Config file (`pi-chrome.json`):
-```json
-{
-  "routes": {
-    "main": ["http://localhost:3000"]
-  },
-  "selectors": {
-    "chatgpt": {
-      "input": "#prompt-textarea"
-    }
-  }
-}
-```
-
-### Script Mode
-
-Run command sequences from JSON files:
-
-```bash
-pi-chrome --script workflow.json
-pi-chrome --script workflow.json --dry-run        # Preview without executing
-pi-chrome --script workflow.json --stop-on-error  # Stop on first failure
-```
-
-Script format:
-```json
-{
-  "name": "My Workflow",
-  "steps": [
-    { "tool": "navigate", "args": { "url": "https://example.com" } },
-    { "tool": "wait", "args": { "duration": 2 } },
-    { "tool": "screenshot", "args": { "savePath": "/tmp/shot.png" } }
-  ]
-}
-```
-
-### Auto-Capture on Error
-
-Automatically capture diagnostics when a command fails:
-
-```bash
-pi-chrome wait.element --auto-capture --selector ".missing" --timeout 2000
-```
-
-Output on failure:
-```
-Error: Timeout waiting for ".missing" to be visible
-Auto-captured: /tmp/pi-chrome-error-1234567890.png
-Console errors: [error] TypeError: ...
+surf wait 2                         # Wait 2 seconds
+surf wait.element ".loaded"         # Wait for element
+surf wait.network                   # Wait for network idle
+surf wait.url "/dashboard"          # Wait for URL pattern
 ```
 
 ## Socket API
 
-Send JSON to `/tmp/pi-chrome.sock`:
+Send JSON to `/tmp/surf.sock`:
 
 ```bash
-echo '{"type":"tool_request","method":"execute_tool","params":{"tool":"tab.list","args":{}},"id":"1"}' | nc -U /tmp/pi-chrome.sock
+echo '{"type":"tool_request","method":"execute_tool","params":{"tool":"tab.list","args":{}},"id":"1"}' | nc -U /tmp/surf.sock
 ```
 
-Response:
-```json
-{"type":"tool_response","id":"1","result":{"content":[{"type":"text","text":"..."}]}}
-```
+## Command Groups
 
-## Available Tools
-
-### Dot-notation (preferred)
-
-| Group | Tools |
-|-------|-------|
-| `tab.*` | `list`, `new`, `switch`, `close`, `name`, `unname`, `named` |
+| Group | Commands |
+|-------|----------|
+| `tab.*` | `list`, `new`, `switch`, `close`, `name`, `unname`, `named`, `group`, `ungroup`, `groups`, `reload` |
 | `scroll.*` | `top`, `bottom`, `to`, `info` |
 | `page.*` | `read`, `text`, `state` |
-| `wait.*` | `element`, `network`, `url` |
+| `wait.*` | `element`, `network`, `url`, `dom`, `load` |
+| `cookie.*` | `list`, `get`, `set`, `clear` |
+| `bookmark.*` | `add`, `remove`, `list` |
+| `history.*` | `list`, `search` |
+| `dialog.*` | `accept`, `dismiss`, `info` |
 
-### Core Tools
+## Aliases
 
-| Tool | Description |
-|------|-------------|
-| `screenshot` | Capture screenshot |
-| `navigate` | Go to URL |
-| `js` | Execute JavaScript (use `return` for values) |
-| `click` | Click by ref or coordinates |
-| `type` | Type text |
-| `smart_type` | Type into selector with contenteditable support |
-| `key` | Press key (Enter, Escape, cmd+a) |
-| `hover` | Hover over element |
-| `drag` | Drag between points |
-| `wait` | Wait N seconds |
-| `health` | Health check URL or element |
-| `smoke` | Multi-URL smoke tests |
-| `console` | Read/stream console messages |
-| `network` | Read/stream network requests |
-
-### Legacy Tools (still supported)
-
-| Tool | Description |
-|------|-------------|
-| `list_tabs`, `new_tab`, `switch_tab`, `close_tab` | Tab management |
-| `scroll_to_position`, `get_scroll_info` | Scrolling |
-| `read_page`, `get_page_text`, `page_state` | Page inspection |
-| `wait_for_element`, `wait_for_network_idle`, `wait_for_url` | Waiting |
-| `javascript_tool` | JS execution (alias: `js`) |
-| `computer` | Anthropic computer-use format wrapper |
-| `read_console_messages`, `read_network_requests` | Dev tools |
-
-Run `pi-chrome --list` for all 50+ tools.
+| Alias | Command |
+|-------|---------|
+| `snap` | `screenshot` (auto-saves to /tmp) |
+| `read` | `page.read` |
+| `find` | `search` |
+| `go` | `navigate` |
 
 ## Architecture
 
 ```
-CLI (pi-chrome) ─────► Socket (/tmp/pi-chrome.sock) ─────► host.cjs ─────► Extension ─────► CDP
+CLI (surf) → Unix Socket (/tmp/surf.sock) → Native Host → Chrome Extension → CDP
 ```
 
 ## Limitations
 
-- Cannot automate `chrome://` pages, Web Store, or other extensions
-- First CDP operation on a new tab takes ~5-8s (debugger attachment)
-- Shows "Chrome is being controlled" banner when CDP active
+- Cannot automate `chrome://` pages or other extensions
+- First CDP operation on a new tab takes ~5s (debugger attachment)
 
 ## Development
 
 ```bash
 npm run dev       # Watch mode
 npm run build     # Production build
-npm run check     # Type check
 ```
 
-### After code changes
-
-- **Extension changes** (`src/`): Reload extension in `chrome://extensions`
-- **Host changes** (`native/host.cjs`): Kill existing process or reload extension
-  ```bash
-  pkill -f host.cjs
-  ```
-
-### Debugging
-
-Service worker logs: `chrome://extensions` > Pi Agent > "Inspect views: service worker"
+After changes:
+- **Extension** (`src/`): Reload at `chrome://extensions`
+- **Host** (`native/`): Restart `node native/host.cjs`

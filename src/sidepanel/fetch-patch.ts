@@ -11,7 +11,7 @@ let streamIdCounter = 0;
 
 export function setUseNativeHost(value: boolean) {
   useNativeHost = value;
-  console.log("[Pi Agent] Native host for API calls:", value ? "enabled" : "disabled");
+  console.log("[Surf] Native host for API calls:", value ? "enabled" : "disabled");
 }
 
 export function handleNativeApiResponse(msg: any): boolean {
@@ -63,7 +63,7 @@ globalThis.fetch = async function(input: RequestInfo | URL, init?: RequestInit):
   
   if (useNativeHost && url.includes("api.anthropic.com")) {
     const headersObj = headersToObject(init?.headers);
-    console.log("[Pi Agent] Routing Anthropic API call through native host:", url, "headers:", Object.keys(headersObj));
+    console.log("[Surf] Routing Anthropic API call through native host:", url, "headers:", Object.keys(headersObj));
     
     return new Promise((resolve, reject) => {
       const streamId = `stream_${++streamIdCounter}_${Date.now()}`;

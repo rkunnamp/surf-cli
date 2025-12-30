@@ -3,7 +3,7 @@ const fs = require("fs");
 const path = require("path");
 const os = require("os");
 
-const HOST_NAME = "com.pi.chrome.host";
+const HOST_NAME = "surf.browser.host";
 
 let manifestDir;
 switch (process.platform) {

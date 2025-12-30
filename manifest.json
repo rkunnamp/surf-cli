@@ -1,6 +1,6 @@
 {
   "manifest_version": 3,
-  "name": "Pi Agent",
+  "name": "Surf",
   "version": "0.1.0",
   "description": "AI-powered browser automation and chat",
   "options_page": "options/options.html",
@@ -10,7 +10,7 @@
     "128": "icons/icon-128.png"
   },
   "action": {
-    "default_title": "Open Pi Agent",
+    "default_title": "Open Surf",
     "default_icon": {
       "16": "icons/icon-16.png",
       "48": "icons/icon-48.png",
@@ -77,7 +77,7 @@
         "default": "Ctrl+Shift+P",
         "mac": "Command+Shift+P"
       },
-      "description": "Toggle Pi Agent side panel"
+      "description": "Toggle Surf side panel"
     }
   }
 }

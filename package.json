@@ -1,10 +1,10 @@
 {
-  "name": "pi-chrome-extension",
-  "version": "0.1.0",
+  "name": "surf-cli",
+  "version": "2.0.0",
   "private": true,
   "type": "module",
   "bin": {
-    "pi-chrome": "./bin/pi-chrome"
+    "surf": "./native/cli.cjs"
   },
   "scripts": {
     "dev": "vite build --watch --mode development",

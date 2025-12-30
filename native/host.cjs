@@ -6,7 +6,7 @@ const os = require("os");
 const https = require("https");
 const { GoogleGenerativeAI } = require("@google/generative-ai");
 
-const SOCKET_PATH = "/tmp/pi-chrome.sock";
+const SOCKET_PATH = "/tmp/surf.sock";
 const LOG_FILE = "/tmp/pi-chrome-host.log";
 const AUTH_FILE = path.join(os.homedir(), ".pi", "agent", "auth.json");
 

@@ -1,11 +1,11 @@
-# Pi Chrome Native Messaging Host
+# Surf Native Messaging Host
 
 Native messaging host that bridges pi-coding-agent to the Chrome extension via Unix socket.
 
 ## Architecture
 
 ```
-Pi-Agent → Unix Socket (/tmp/pi-chrome.sock) → Native Host (host.cjs) → Chrome Native Messaging → Extension
+Pi-Agent → Unix Socket (/tmp/surf.sock) → Native Host (host.cjs) → Chrome Native Messaging → Extension
 ```
 
 ## Files
@@ -26,7 +26,7 @@ mkdir -p ~/Library/Application\ Support/Google/Chrome/NativeMessagingHosts
 cat > ~/Library/Application\ Support/Google/Chrome/NativeMessagingHosts/com.anthropic.pi_chrome.json << EOF
 {
   "name": "com.anthropic.pi_chrome",
-  "description": "Pi Chrome Extension Native Host",
+  "description": "Surf Extension Native Host",
   "path": "$PWD/host-wrapper.py",
   "type": "stdio",
   "allowed_origins": ["chrome-extension://YOUR_EXTENSION_ID/"]
@@ -39,12 +39,12 @@ EOF
 node host.cjs
 ```
 
-The host creates a Unix socket at `/tmp/pi-chrome.sock`.
+The host creates a Unix socket at `/tmp/surf.sock`.
 
 ## CLI Usage
 
 ```bash
-pi-chrome <command> [args] [options]
+surf <command> [args] [options]
 ```
 
 ### Common Commands
@@ -61,77 +61,77 @@ pi-chrome <command> [args] [options]
 ### Navigation
 
 ```bash
-pi-chrome go "https://example.com"
-pi-chrome back
-pi-chrome forward
-pi-chrome tab.reload --hard
+surf go "https://example.com"
+surf back
+surf forward
+surf tab.reload --hard
 ```
 
 ### Page Interaction
 
 ```bash
-pi-chrome read                           # Get interactive elements
-pi-chrome click e5                       # Click by element ref
-pi-chrome click --selector ".btn"        # Click by CSS selector
-pi-chrome click 100 200                  # Click by coordinates
-pi-chrome type "hello" --submit          # Type and press Enter
-pi-chrome key Escape                     # Press key
+surf read                           # Get interactive elements
+surf click e5                       # Click by element ref
+surf click --selector ".btn"        # Click by CSS selector
+surf click 100 200                  # Click by coordinates
+surf type "hello" --submit          # Type and press Enter
+surf key Escape                     # Press key
 ```
 
 ### Screenshots
 
 ```bash
-pi-chrome screenshot --output /tmp/shot.png
-pi-chrome screenshot --annotate --output /tmp/labeled.png
-pi-chrome screenshot --fullpage --output /tmp/full.png
-pi-chrome snap                           # Auto-saves to /tmp
+surf screenshot --output /tmp/shot.png
+surf screenshot --annotate --output /tmp/labeled.png
+surf screenshot --fullpage --output /tmp/full.png
+surf snap                           # Auto-saves to /tmp
 ```
 
 ### Tabs
 
 ```bash
-pi-chrome tab.list
-pi-chrome tab.new "https://example.com"
-pi-chrome tab.switch 123
-pi-chrome tab.close 123
-pi-chrome tab.group --name "Work" --color blue
+surf tab.list
+surf tab.new "https://example.com"
+surf tab.switch 123
+surf tab.close 123
+surf tab.group --name "Work" --color blue
 ```
 
 ### Cookies
 
 ```bash
-pi-chrome cookie.list
-pi-chrome cookie.get --name "session"
-pi-chrome cookie.set --name "foo" --value "bar"
-pi-chrome cookie.clear --all
+surf cookie.list
+surf cookie.get --name "session"
+surf cookie.set --name "foo" --value "bar"
+surf cookie.clear --all
 ```
 
 ### Bookmarks & History
 
 ```bash
-pi-chrome bookmark.add
-pi-chrome bookmark.list --limit 20
-pi-chrome history.list --limit 10
-pi-chrome history.search "github"
+surf bookmark.add
+surf bookmark.list --limit 20
+surf history.list --limit 10
+surf history.search "github"
 ```
 
 ### Other
 
 ```bash
-pi-chrome zoom 1.5                       # Set zoom to 150%
-pi-chrome resize --width 1280 --height 720
-pi-chrome wait 2                         # Wait 2 seconds
-pi-chrome js "return document.title"     # Execute JavaScript
+surf zoom 1.5                       # Set zoom to 150%
+surf resize --width 1280 --height 720
+surf wait 2                         # Wait 2 seconds
+surf js "return document.title"     # Execute JavaScript
 ```
 
 ### Help
 
 ```bash
-pi-chrome --help                         # Basic help
-pi-chrome --help-full                    # All commands
-pi-chrome <command> --help               # Command details
-pi-chrome --find <query>                 # Search commands
-pi-chrome --about refs                   # Topic guide
+surf --help                         # Basic help
+surf --help-full                    # All commands
+surf <command> --help               # Command details
+surf --find <query>                 # Search commands
+surf --about refs                   # Topic guide
 ```
 
 ## Protocol

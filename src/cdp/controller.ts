@@ -529,7 +529,7 @@ export class CDPController {
     try {
       const contextResult = await this.send(tabId, "Page.createIsolatedWorld", {
         frameId,
-        worldName: "pi-chrome-isolated",
+        worldName: "surf-isolated",
       });
       const wrappedExpression = `JSON.stringify((function() { ${expression} })())`;
       const result = await this.send(tabId, "Runtime.evaluate", {

@@ -2,7 +2,7 @@ const fs = require("fs");
 const path = require("path");
 const os = require("os");
 
-const CONFIG_NAME = "pi-chrome.json";
+const CONFIG_NAME = "surf.json";
 
 let cachedConfig = null;
 let cachedConfigPath = null;

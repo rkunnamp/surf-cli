@@ -203,7 +203,7 @@ export function getBrowserTools(): AgentTool<any>[] {
   ];
 }
 
-export const BROWSER_AGENT_SYSTEM_PROMPT = `You are Pi Agent, an AI assistant that can control the browser.
+export const BROWSER_AGENT_SYSTEM_PROMPT = `You are Surf, an AI assistant that can control the browser.
 
 ## Available Tools
 - **computer**: Unified tool for all mouse/keyboard actions (click, type, key, scroll, etc.)

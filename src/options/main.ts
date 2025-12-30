@@ -3,7 +3,7 @@ import "@mariozechner/pi-web-ui/app.css";
 const app = document.getElementById("app")!;
 
 app.innerHTML = `
-  <h1 style="font-size: 1.5rem; font-weight: bold; margin-bottom: 1.5rem;">Pi Agent Settings</h1>
+  <h1 style="font-size: 1.5rem; font-weight: bold; margin-bottom: 1.5rem;">Surf Settings</h1>
   
   <section style="margin-bottom: 2rem;">
     <h2 style="font-size: 1.125rem; font-weight: 600; margin-bottom: 1rem;">API Keys</h2>
@@ -30,14 +30,14 @@ app.innerHTML = `
       <input type="number" id="heartbeat-interval" min="5" max="60" value="10" style="width: 4rem; padding: 0.25rem 0.5rem; border: 1px solid #ccc; border-radius: 0.25rem;" />
     </label>
     <p style="color: #666; font-size: 0.875rem; margin-top: 0.5rem;">
-      How often the static indicator checks if Pi Agent is still active (5-60 seconds).
+      How often the static indicator checks if Surf is still active (5-60 seconds).
     </p>
   </section>
   
   <section style="margin-bottom: 2rem;">
     <h2 style="font-size: 1.125rem; font-weight: 600; margin-bottom: 1rem;">About</h2>
     <p style="color: #666;">
-      Pi Agent v${chrome.runtime.getManifest().version}
+      Surf v${chrome.runtime.getManifest().version}
     </p>
   </section>
 `;

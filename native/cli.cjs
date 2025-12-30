@@ -3,7 +3,7 @@ const net = require("net");
 const fs = require("fs");
 const { loadConfig, getConfigPath, createStarterConfig } = require("./config.cjs");
 
-const SOCKET_PATH = "/tmp/pi-chrome.sock";
+const SOCKET_PATH = "/tmp/surf.sock";
 const args = process.argv.slice(2);
 const VERSION = "2.0.0";
 
@@ -629,9 +629,9 @@ const ALL_SOCKET_TOOLS = [
 ];
 
 const showBasicHelp = () => {
-  console.log(`pi-chrome v${VERSION} - Browser automation CLI
+  console.log(`surf v${VERSION} - Browser automation CLI
 
-Usage: pi-chrome <command> [args] [options]
+Usage: surf <command> [args] [options]
 
 Common Commands:
   navigate <url>     Go to URL (alias: go)
@@ -643,25 +643,25 @@ Common Commands:
   wait <seconds>     Wait N seconds
 
 Quick Examples:
-  pi-chrome go "https://example.com"
-  pi-chrome read
-  pi-chrome click e5
-  pi-chrome type "hello" --submit
-  pi-chrome snap
+  surf go "https://example.com"
+  surf read
+  surf click e5
+  surf type "hello" --submit
+  surf snap
 
 More Help:
-  pi-chrome --help-full           All commands
-  pi-chrome --help-topic <topic>  Topic guide (refs, selectors, cookies, batch, screenshots, automation)
-  pi-chrome <command> --help      Command details
-  pi-chrome --find <query>        Search for commands
-  pi-chrome --about <topic>       Learn about a topic
+  surf --help-full           All commands
+  surf --help-topic <topic>  Topic guide (refs, selectors, cookies, batch, screenshots, automation)
+  surf <command> --help      Command details
+  surf --find <query>        Search for commands
+  surf --about <topic>       Learn about a topic
 `);
 };
 
 const showFullHelp = () => {
-  console.log(`pi-chrome v${VERSION} - Browser automation CLI
+  console.log(`surf v${VERSION} - Browser automation CLI
 
-Usage: pi-chrome <command> [args] [options]
+Usage: surf <command> [args] [options]
 
 `);
   for (const [groupName, group] of Object.entries(TOOLS)) {
@@ -682,8 +682,8 @@ Options:
   --auto-capture    On error: capture screenshot + console to /tmp
 
 Script Mode:
-  pi-chrome --script <file>     Run workflow from JSON
-  pi-chrome --script <file> --dry-run
+  surf --script <file>     Run workflow from JSON
+  surf --script <file> --dry-run
 `);
 };
 
@@ -721,7 +721,7 @@ const showGroupHelp = (groupName) => {
     if (info.examples?.length) {
       console.log("      Examples:");
       for (const ex of info.examples) {
-        console.log(`        pi-chrome ${ex.cmd}`);
+        console.log(`        surf ${ex.cmd}`);
       }
     }
     console.log();
@@ -739,7 +739,7 @@ const showToolHelp = (toolName) => {
       }
       const argStr = info.args?.length ? `<${info.args.join("> <")}>` : "";
       console.log(`\n${toolName} - ${info.desc}\n`);
-      console.log(`Usage: pi-chrome ${toolName} ${argStr}\n`);
+      console.log(`Usage: surf ${toolName} ${argStr}\n`);
       if (info.args?.length) {
         console.log("Arguments:");
         for (const arg of info.args) {
@@ -757,7 +757,7 @@ const showToolHelp = (toolName) => {
       if (info.examples?.length) {
         console.log("Examples:");
         for (const ex of info.examples) {
-          console.log(`  pi-chrome ${ex.cmd.padEnd(40)} ${ex.desc}`);
+          console.log(`  surf ${ex.cmd.padEnd(40)} ${ex.desc}`);
         }
         console.log();
       }
@@ -851,7 +851,7 @@ if (args[0] === "--help-topic" && args[1]) {
 }
 
 if (args[0] === "--version" || args[0] === "-v") {
-  console.log(`pi-chrome version ${VERSION}`);
+  console.log(`surf version ${VERSION}`);
   process.exit(0);
 }
 
@@ -872,7 +872,7 @@ if (args[0] === "--about" && args[1]) {
 
 if (args[0] === "server") {
   if (args.includes("--help") || args.includes("-h")) {
-    console.log("Usage: pi-chrome server");
+    console.log("Usage: surf server");
     console.log("");
     console.log("Start MCP server for Claude Desktop/Cursor integration.");
     console.log("Communicates via stdio using the Model Context Protocol.");
@@ -943,7 +943,7 @@ if (args[0] === "config") {
     console.log(JSON.stringify(config, null, 2));
   } else {
     console.log("No config found");
-    console.log("Create one with: pi-chrome config --init");
+    console.log("Create one with: surf config --init");
   }
   process.exit(0);
 }
@@ -1133,7 +1133,7 @@ const wasSnap = tool === "snap";
 tool = ALIASES[tool] || tool;
 
 if (wasSnap && !options.output && !options.savePath) {
-  options.savePath = `/tmp/pi-chrome-snap-${Date.now()}.png`;
+  options.savePath = `/tmp/surf-snap-${Date.now()}.png`;
 }
 
 if (tool === "smoke") {
@@ -1415,7 +1415,7 @@ const sendRequest = (toolName, toolArgs = {}) => {
 
 const performAutoCapture = async () => {
   const timestamp = Date.now();
-  const screenshotPath = `/tmp/pi-chrome-error-${timestamp}.png`;
+  const screenshotPath = `/tmp/surf-error-${timestamp}.png`;
 
   try {
     const [screenshotResp, consoleResp] = await Promise.all([
