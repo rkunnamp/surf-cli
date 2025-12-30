@@ -2120,12 +2120,14 @@ initNativeMessaging(async (msg) => {
       throw new Error(`Invalid tab ID: ${tabId}`);
     }
   } else if (!tabId) {
-    let [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+    let tabs = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+    let tab: chrome.tabs.Tab | undefined = tabs[0];
     if (!tab || tab.url?.startsWith('chrome-extension://')) {
-      [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+      tab = tabs[0];
     }
     if (!tab || tab.url?.startsWith('chrome-extension://') || tab.url?.startsWith('chrome://')) {
-      const tabs = await chrome.tabs.query({ active: true });
+      tabs = await chrome.tabs.query({ active: true });
       tab = tabs.find(t => !t.url?.startsWith('chrome-extension://') && !t.url?.startsWith('chrome://'));
     }
     tabId = tab?.id;
