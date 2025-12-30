@@ -4,16 +4,6 @@ app.innerHTML = `
   <h1 style="font-size: 1.5rem; font-weight: bold; margin-bottom: 1.5rem;">Surf Settings</h1>
   
   <section style="margin-bottom: 2rem;">
-    <h2 style="font-size: 1.125rem; font-weight: 600; margin-bottom: 1rem;">API Keys</h2>
-    <p class="muted" style="margin-bottom: 1rem;">
-      API keys are stored locally in your browser and never sent to any server except the provider's API.
-    </p>
-    <button id="clear-keys" style="padding: 0.5rem 1rem; background: #dc2626; color: white; border: none; border-radius: 0.375rem; cursor: pointer;">
-      Clear All API Keys
-    </button>
-  </section>
-  
-  <section style="margin-bottom: 2rem;">
     <h2 style="font-size: 1.125rem; font-weight: 600; margin-bottom: 1rem;">Debug Mode</h2>
     <label style="display: flex; align-items: center; gap: 0.5rem;">
       <input type="checkbox" id="debug-mode" style="width: 1rem; height: 1rem;" />
@@ -39,15 +29,6 @@ app.innerHTML = `
     </p>
   </section>
 `;
-
-document.getElementById("clear-keys")?.addEventListener("click", async () => {
-  if (confirm("Are you sure you want to clear all stored API keys?")) {
-    const keys = await chrome.storage.local.get(null);
-    const keysToClear = Object.keys(keys).filter(k => k.startsWith("provider-keys:"));
-    await chrome.storage.local.remove(keysToClear);
-    alert("API keys cleared.");
-  }
-});
 
 const debugCheckbox = document.getElementById("debug-mode") as HTMLInputElement | null;
 if (debugCheckbox) {
