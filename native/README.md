@@ -115,6 +115,26 @@ surf history.list --limit 10
 surf history.search "github"
 ```
 
+### ChatGPT Integration
+
+Query ChatGPT using your browser's logged-in session. No API keys required.
+
+```bash
+surf chatgpt "explain this code"
+surf chatgpt "summarize" --with-page     # Include page context
+surf chatgpt "analyze" --model gpt-4o    # Specify model
+surf chatgpt "long task" --timeout 60    # Custom timeout (seconds)
+```
+
+**Requirements:**
+- Logged into chatgpt.com in Chrome
+- Default timeout: 45 minutes
+
+**Gemini (Coming Soon):**
+```bash
+surf gemini "explain this"
+```
+
 ### Other
 
 ```bash

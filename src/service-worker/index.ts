@@ -292,6 +292,7 @@ async function handleMessage(
       try {
         let result: { base64: string; width: number; height: number };
         let scaleInfo = { scaleX: 1, scaleY: 1 };
+        let usedFallback = false;
         
         if (message.fullpage) {
           result = await captureFullPage(tabId, message.maxHeight || 4000);
@@ -301,18 +302,35 @@ async function handleMessage(
             scaleInfo = { scaleX: dpr, scaleY: dpr };
           } catch {}
         } else {
-          const rawResult = await cdp.captureScreenshot(tabId);
-          result = rawResult;
           try {
-            const viewport = await cdp.getViewportSize(tabId);
-            scaleInfo = {
-              scaleX: rawResult.width / viewport.width,
-              scaleY: rawResult.height / viewport.height,
-            };
-          } catch {}
+            const rawResult = await cdp.captureScreenshot(tabId);
+            result = rawResult;
+            try {
+              const viewport = await cdp.getViewportSize(tabId);
+              scaleInfo = {
+                scaleX: rawResult.width / viewport.width,
+                scaleY: rawResult.height / viewport.height,
+              };
+            } catch {}
+          } catch (cdpError) {
+            const tab = await chrome.tabs.get(tabId);
+            if (!tab.windowId) throw cdpError;
+            const dataUrl = await chrome.tabs.captureVisibleTab(tab.windowId, { format: "png" });
+            const base64 = dataUrl.replace(/^data:image\/png;base64,/, "");
+            const binaryString = atob(base64);
+            const bytes = new Uint8Array(binaryString.length);
+            for (let i = 0; i < binaryString.length; i++) {
+              bytes[i] = binaryString.charCodeAt(i);
+            }
+            const blob = new Blob([bytes], { type: "image/png" });
+            const bitmap = await createImageBitmap(blob);
+            result = { base64, width: bitmap.width, height: bitmap.height };
+            bitmap.close();
+            usedFallback = true;
+          }
         }
         
-        if (message.annotate) {
+        if (message.annotate && !usedFallback) {
           try {
             const treeResult = await chrome.tabs.sendMessage(tabId, {
               type: "GET_ELEMENT_BOUNDS_FOR_ANNOTATION",
@@ -768,6 +786,19 @@ async function handleMessage(
           type: "FORM_INPUT",
           ref: message.ref,
           value: message.value,
+        }, { frameId: 0 });
+      } catch (err) {
+        return { error: "Content script not loaded. Try refreshing the page." };
+      }
+    }
+
+    case "EVAL_IN_PAGE": {
+      if (!tabId) throw new Error("No tabId provided");
+      if (!message.code) throw new Error("No code provided");
+      try {
+        return await chrome.tabs.sendMessage(tabId, {
+          type: "EVAL_IN_PAGE",
+          code: message.code,
         }, { frameId: 0 });
       } catch (err) {
         return { error: "Content script not loaded. Try refreshing the page." };
@@ -1962,6 +1993,68 @@ async function handleMessage(
       };
     }
 
+    case "GET_CHATGPT_COOKIES": {
+      const cookies = await chrome.cookies.getAll({ domain: ".chatgpt.com" });
+      const openaiCookies = await chrome.cookies.getAll({ domain: ".openai.com" });
+      return { cookies: [...cookies, ...openaiCookies] };
+    }
+
+    case "CHATGPT_NEW_TAB": {
+      const tab = await chrome.tabs.create({
+        url: "https://chatgpt.com/",
+        active: true,
+      });
+      if (!tab.id) throw new Error("Failed to create tab");
+      const currentTab = await chrome.tabs.get(tab.id);
+      if (currentTab.status !== "complete") {
+        await new Promise<void>((resolve) => {
+          const listener = (tabId: number, info: chrome.tabs.TabChangeInfo) => {
+            if (tabId === tab.id && info.status === "complete") {
+              chrome.tabs.onUpdated.removeListener(listener);
+              resolve();
+            }
+          };
+          chrome.tabs.onUpdated.addListener(listener);
+          setTimeout(() => {
+            chrome.tabs.onUpdated.removeListener(listener);
+            resolve();
+          }, 30000);
+        });
+      }
+      await cdp.attach(tab.id);
+      return { tabId: tab.id };
+    }
+
+    case "CHATGPT_CLOSE_TAB": {
+      const chatTabId = message.tabId;
+      if (chatTabId) {
+        try {
+          await cdp.detach(chatTabId);
+        } catch {}
+        try {
+          await chrome.tabs.remove(chatTabId);
+        } catch {}
+      }
+      return { success: true };
+    }
+
+    case "CHATGPT_CDP_COMMAND": {
+      const { method, params } = message;
+      const result = await cdp.sendCommand(message.tabId, method, params || {});
+      return result;
+    }
+
+    case "CHATGPT_EVALUATE": {
+      const result = await cdp.evaluateScript(message.tabId, message.expression);
+      return result;
+    }
+
+    case "GET_GOOGLE_COOKIES": {
+      const googleCookies = await chrome.cookies.getAll({ domain: ".google.com" });
+      const geminiCookies = await chrome.cookies.getAll({ domain: ".gemini.google.com" });
+      return { cookies: [...googleCookies, ...geminiCookies] };
+    }
+
     default:
       throw new Error(`Unknown message type: ${message.type}`);
   }
@@ -1981,7 +2074,14 @@ initNativeMessaging(async (msg) => {
       throw new Error(`Invalid tab ID: ${tabId}`);
     }
   } else if (!tabId) {
-    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    let [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+    if (!tab || tab.url?.startsWith('chrome-extension://')) {
+      [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    }
+    if (!tab || tab.url?.startsWith('chrome-extension://') || tab.url?.startsWith('chrome://')) {
+      const tabs = await chrome.tabs.query({ active: true });
+      tab = tabs.find(t => !t.url?.startsWith('chrome-extension://') && !t.url?.startsWith('chrome://'));
+    }
     tabId = tab?.id;
   }
   const result = await handleMessage({ ...msg, tabId }, {} as chrome.runtime.MessageSender);

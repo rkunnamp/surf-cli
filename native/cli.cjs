@@ -49,10 +49,44 @@ const REMOVED_COMMANDS = {
 
 const TOOLS = {
   ai: {
-    desc: "AI-powered page analysis",
+    desc: "AI assistants (ChatGPT, Gemini)",
     commands: {
+      "chatgpt": { 
+        desc: "Send prompt to ChatGPT (uses browser cookies)", 
+        args: ["query"], 
+        opts: { 
+          "with-page": "Include current page context",
+          model: "Model: gpt-4o, o1, etc.",
+          file: "Attach file",
+          timeout: "Timeout in seconds (default: 2700 = 45min)"
+        },
+        examples: [
+          { cmd: 'chatgpt "explain this code"', desc: "Basic query" },
+          { cmd: 'chatgpt "summarize" --with-page', desc: "With page context" },
+          { cmd: 'chatgpt "review" --file code.ts', desc: "With file" },
+          { cmd: 'chatgpt "analyze" --model gpt-4o', desc: "Specify model" },
+        ]
+      },
+      "gemini": { 
+        desc: "Send prompt to Gemini (uses browser cookies) [coming soon]", 
+        args: ["query"], 
+        opts: { 
+          "with-page": "Include current page context",
+          model: "Model: gemini-3-pro, gemini-2.5-pro, gemini-2.5-flash",
+          file: "Attach file",
+          "generate-image": "Generate image from prompt",
+          "edit-image": "Edit existing image",
+          output: "Output file path for generated images",
+          timeout: "Timeout in seconds (default: 300 = 5min)"
+        },
+        examples: [
+          { cmd: 'gemini "explain this"', desc: "Basic query" },
+          { cmd: 'gemini "summarize" --with-page', desc: "With page context" },
+          { cmd: 'gemini --generate-image "a robot surfing"', desc: "Generate image" },
+        ]
+      },
       "ai": { 
-        desc: "Analyze page with AI", 
+        desc: "Analyze page with AI (requires GOOGLE_API_KEY)", 
         args: ["query"], 
         opts: { mode: "Query mode: find|summary|extract (auto-detected)" },
         examples: [
@@ -139,20 +173,23 @@ const TOOLS = {
         examples: [{ cmd: "forward", desc: "Browser forward" }]
       },
       "screenshot": { 
-        desc: "Capture screenshot", 
+        desc: "Capture screenshot (auto-resized for LLM by default)", 
         args: [], 
         opts: { 
           output: "Save to file", 
           selector: "Capture specific element", 
           annotate: "Draw element labels", 
           fullpage: "Capture full page", 
-          "max-height": "Max height for fullpage (default: 4000)" 
+          "max-height": "Max height for fullpage (default: 4000)",
+          full: "Skip resize, save at full resolution",
+          "max-size": "Max dimension in px (default: 1200)" 
         },
         examples: [
-          { cmd: "screenshot --output /tmp/shot.png", desc: "Save to file" },
+          { cmd: "screenshot --output /tmp/shot.png", desc: "Save to file (auto-resized)" },
+          { cmd: "screenshot --full --output /tmp/shot.png", desc: "Full resolution" },
+          { cmd: "screenshot --max-size 800 --output /tmp/small.png", desc: "Custom max size" },
           { cmd: "screenshot --annotate --output /tmp/annotated.png", desc: "With element labels" },
-          { cmd: "screenshot --annotate --fullpage --output /tmp/full.png", desc: "Full page annotated" },
-          { cmd: "snap", desc: "Auto-save to /tmp" },
+          { cmd: "snap", desc: "Auto-save to /tmp (resized)" },
         ]
       },
       "snap": { desc: "Alias for screenshot (auto-saves to /tmp)", args: [], alias: "screenshot" },
@@ -246,18 +283,18 @@ const TOOLS = {
         ]
       },
       "type": { 
-        desc: "Type text", 
+        desc: "Type text (uses form.fill when --ref provided for better modal/form support)", 
         args: ["text"], 
         opts: { 
           into: "Target selector",
-          ref: "Element ref", 
+          ref: "Element ref (uses JS DOM method, more reliable for modals)", 
           submit: "Press enter after", 
           clear: "Clear first", 
-          method: "cdp|js (default: cdp)" 
+          method: "cdp|js (default: cdp, but ref uses JS automatically)" 
         },
         examples: [
-          { cmd: 'type "hello world"', desc: "Type at cursor" },
-          { cmd: 'type "user@example.com" --into "#email"', desc: "Type into element" },
+          { cmd: 'type "hello world"', desc: "Type at cursor (CDP events)" },
+          { cmd: 'type "user@example.com" --ref e5', desc: "Type into element by ref (JS DOM)" },
           { cmd: 'type "search query" --submit', desc: "Type and press Enter" },
         ]
       },
@@ -1083,7 +1120,9 @@ if (args.includes("--script")) {
   return;
 }
 
-const BOOLEAN_FLAGS = ["auto-capture", "json", "stream", "dry-run", "stop-on-error", "fail-fast", "clear", "submit", "all", "case-sensitive", "hard", "annotate", "fullpage", "reset"];
+const BOOLEAN_FLAGS = ["auto-capture", "json", "stream", "dry-run", "stop-on-error", "fail-fast", "clear", "submit", "all", "case-sensitive", "hard", "annotate", "fullpage", "reset", "no-screenshot", "full"];
+
+const AUTO_SCREENSHOT_TOOLS = ["click", "type", "key", "smart_type", "form.fill", "form_input", "drag", "hover", "scroll", "scroll.top", "scroll.bottom", "scroll.to", "dialog.accept", "dialog.dismiss", "js", "eval"];
 
 const parseArgs = (rawArgs) => {
   const result = { positional: [], options: {} };
@@ -1233,6 +1272,13 @@ delete toolArgs.json;
 const autoCapture = toolArgs["auto-capture"] === true;
 delete toolArgs["auto-capture"];
 
+const noScreenshot = toolArgs["no-screenshot"] === true;
+delete toolArgs["no-screenshot"];
+
+if (!noScreenshot && AUTO_SCREENSHOT_TOOLS.includes(tool)) {
+  toolArgs.autoScreenshot = true;
+}
+
 const outputPath = toolArgs.output;
 delete toolArgs.output;
 
@@ -1242,6 +1288,8 @@ if ((tool === "screenshot" || tool === "snap") && outputPath) {
     process.exit(1);
   }
   toolArgs.savePath = outputPath;
+  if (options.full) toolArgs.full = true;
+  if (options["max-size"]) toolArgs["max-size"] = options["max-size"];
 }
 
 const methodFlag = toolArgs.method;
@@ -1529,7 +1577,26 @@ async function handleResponse(response) {
   if ((tool === "screenshot" || tool === "snap") && data?.base64 && (outputPath || toolArgs.savePath)) {
     const saveTo = outputPath || toolArgs.savePath;
     fs.writeFileSync(saveTo, Buffer.from(data.base64, "base64"));
-    console.log(`Screenshot saved: ${saveTo}`);
+    
+    const skipResize = options.full || toolArgs.full;
+    const maxSize = parseInt(options["max-size"] || toolArgs["max-size"] || "1200", 10);
+    const origWidth = data.width || 0;
+    const origHeight = data.height || 0;
+    
+    if (!skipResize && (origWidth > maxSize || origHeight > maxSize)) {
+      try {
+        const { execSync } = require("child_process");
+        execSync(`sips --resampleHeightWidthMax ${maxSize} "${saveTo}" --out "${saveTo}" 2>/dev/null`, { stdio: "pipe" });
+        const sizeInfo = execSync(`sips -g pixelWidth -g pixelHeight "${saveTo}" 2>/dev/null`, { encoding: "utf8" });
+        const newWidth = sizeInfo.match(/pixelWidth:\s*(\d+)/)?.[1] || "?";
+        const newHeight = sizeInfo.match(/pixelHeight:\s*(\d+)/)?.[1] || "?";
+        console.log(`Saved to ${saveTo} (${newWidth}x${newHeight}, resized from ${origWidth}x${origHeight})`);
+      } catch (e) {
+        console.log(`Saved to ${saveTo} (${origWidth}x${origHeight}, resize failed: ${e.message})`);
+      }
+    } else {
+      console.log(`Saved to ${saveTo} (${origWidth}x${origHeight})`);
+    }
   } else if ((tool === "screenshot" || tool === "snap") && data?.message) {
     console.log(data.message);
   } else if (tool === "tab.list") {

@@ -1453,6 +1453,18 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       sendResponse(result);
       break;
     }
+    case "EVAL_IN_PAGE": {
+      try {
+        const script = document.createElement('script');
+        script.textContent = `(function() { ${message.code} })();`;
+        document.documentElement.appendChild(script);
+        script.remove();
+        sendResponse({ success: true });
+      } catch (err) {
+        sendResponse({ success: false, error: err instanceof Error ? err.message : String(err) });
+      }
+      break;
+    }
     case "GET_PAGE_TEXT": {
       const result = getPageText();
       sendResponse(result);

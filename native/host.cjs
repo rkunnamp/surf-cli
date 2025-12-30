@@ -5,8 +5,34 @@ const path = require("path");
 const os = require("os");
 const https = require("https");
 const { GoogleGenerativeAI } = require("@google/generative-ai");
+const chatgptClient = require("./chatgpt-client.cjs");
 
 const SOCKET_PATH = "/tmp/surf.sock";
+
+const aiRequestQueue = [];
+let aiRequestInProgress = false;
+
+function queueAiRequest(handler) {
+  return new Promise((resolve, reject) => {
+    aiRequestQueue.push({ handler, resolve, reject });
+    processAiQueue();
+  });
+}
+
+async function processAiQueue() {
+  if (aiRequestInProgress || aiRequestQueue.length === 0) return;
+  aiRequestInProgress = true;
+  const { handler, resolve, reject } = aiRequestQueue.shift();
+  try {
+    const result = await handler();
+    resolve(result);
+  } catch (err) {
+    reject(err);
+  } finally {
+    aiRequestInProgress = false;
+    setTimeout(processAiQueue, 2000);
+  }
+}
 const LOG_FILE = "/tmp/pi-chrome-host.log";
 const AUTH_FILE = path.join(os.homedir(), ".pi", "agent", "auth.json");
 
@@ -458,8 +484,22 @@ function formatToolContent(result) {
   }
 
   if (result.autoScreenshot) {
-    const { path: ssPath } = result.autoScreenshot;
-    return text(`Screenshot saved. Read: ${ssPath}`);
+    const { path: ssPath, width, height } = result.autoScreenshot;
+    try {
+      const imgData = fs.readFileSync(ssPath);
+      const base64 = imgData.toString("base64");
+      const dims = width && height ? `${width}x${height}` : "unknown";
+      return [
+        { type: "text", text: `OK\nScreenshot (${dims}): ${ssPath}` },
+        { type: "image", data: base64, mimeType: "image/png" }
+      ];
+    } catch {
+      return text(`OK\nScreenshot saved: ${ssPath}`);
+    }
+  }
+
+  if (result.autoScreenshotError) {
+    return text(`OK\n[Screenshot failed: ${result.autoScreenshotError}]`);
   }
 
   if (result.success) {
@@ -508,6 +548,8 @@ function mapToolToMessage(tool, args, tabId) {
       return { type: "GET_PAGE_TEXT", ...baseMsg };
     case "form_input":
       return { type: "FORM_INPUT", ref: a.ref, value: a.value, ...baseMsg };
+    case "eval":
+      return { type: "EVAL_IN_PAGE", code: a.code, ...baseMsg };
     case "find_and_type":
       return { type: "FIND_AND_TYPE", text: a.text, submit: a.submit ?? false, submitKey: a.submitKey || "Enter", ...baseMsg };
     case "autocomplete":
@@ -533,6 +575,8 @@ function mapToolToMessage(tool, args, tabId) {
         annotate: a.annotate || false,
         fullpage: a.fullpage || false,
         maxHeight: a["max-height"] || 4000,
+        fullRes: a.full || false,
+        maxSize: a["max-size"] || 1200,
         ...baseMsg 
       };
     case "javascript_tool":
@@ -811,6 +855,31 @@ function mapToolToMessage(tool, args, tabId) {
     case "history.search":
       if (!a.query) throw new Error("query required");
       return { type: "HISTORY_SEARCH", query: a.query, limit: a.limit !== undefined ? parseInt(a.limit, 10) : 20 };
+    case "chatgpt":
+      if (!a.query) throw new Error("query required");
+      return { 
+        type: "CHATGPT_QUERY", 
+        query: a.query, 
+        model: a.model,
+        withPage: a["with-page"],
+        file: a.file,
+        timeout: a.timeout ? parseInt(a.timeout, 10) * 1000 : 2700000,
+        ...baseMsg 
+      };
+    case "gemini":
+      if (!a.query && !a["generate-image"]) throw new Error("query required");
+      return {
+        type: "GEMINI_QUERY",
+        query: a.query,
+        model: a.model || "gemini-3-pro",
+        withPage: a["with-page"],
+        file: a.file,
+        generateImage: a["generate-image"],
+        editImage: a["edit-image"],
+        output: a.output,
+        timeout: a.timeout ? parseInt(a.timeout, 10) * 1000 : 300000,
+        ...baseMsg
+      };
     default:
       return null;
   }
@@ -849,6 +918,9 @@ function mapComputerAction(args, tabId) {
       return { type: "EXECUTE_TRIPLE_CLICK", x: coordinate?.[0], y: coordinate?.[1], modifiers, ...baseMsg };
     
     case "type":
+      if (ref) {
+        return { type: "FORM_FILL", data: [{ ref, value: text }], ...baseMsg };
+      }
       return { type: "EXECUTE_TYPE", text, ...baseMsg };
     
     case "key": {
@@ -1035,6 +1107,112 @@ function handleToolRequest(msg, socket) {
     return;
   }
   
+  if (extensionMsg.type === "CHATGPT_QUERY") {
+    const { query, model, withPage, file, timeout } = extensionMsg;
+    
+    queueAiRequest(async () => {
+      let pageContext = null;
+      if (withPage) {
+        const pageResult = await new Promise((resolve) => {
+          const pageId = ++requestCounter;
+          pendingToolRequests.set(pageId, {
+            socket: null,
+            originalId: null,
+            tool: "read_page",
+            onComplete: resolve
+          });
+          writeMessage({ type: "GET_PAGE_TEXT", tabId: extensionMsg.tabId, id: pageId });
+        });
+        if (pageResult && !pageResult.error) {
+          pageContext = {
+            url: pageResult.url,
+            text: pageResult.text || pageResult.pageContent || ""
+          };
+        }
+      }
+      
+      let fullPrompt = query;
+      if (pageContext) {
+        fullPrompt = `Page: ${pageContext.url}\n\n${pageContext.text}\n\n---\n\n${query}`;
+      }
+      
+      const result = await chatgptClient.query({
+        prompt: fullPrompt,
+        model,
+        file,
+        timeout,
+        getCookies: () => new Promise((resolve) => {
+          const cookieId = ++requestCounter;
+          pendingToolRequests.set(cookieId, {
+            socket: null,
+            originalId: null,
+            tool: "get_cookies",
+            onComplete: (r) => resolve(r)
+          });
+          writeMessage({ type: "GET_CHATGPT_COOKIES", id: cookieId });
+        }),
+        createTab: () => new Promise((resolve) => {
+          const tabCreateId = ++requestCounter;
+          pendingToolRequests.set(tabCreateId, {
+            socket: null,
+            originalId: null,
+            tool: "create_tab",
+            onComplete: (r) => resolve(r)
+          });
+          writeMessage({ type: "CHATGPT_NEW_TAB", id: tabCreateId });
+        }),
+        closeTab: (tabIdToClose) => new Promise((resolve) => {
+          const tabCloseId = ++requestCounter;
+          pendingToolRequests.set(tabCloseId, {
+            socket: null,
+            originalId: null,
+            tool: "close_tab",
+            onComplete: (r) => resolve(r)
+          });
+          writeMessage({ type: "CHATGPT_CLOSE_TAB", tabId: tabIdToClose, id: tabCloseId });
+        }),
+        cdpEvaluate: (tabId, expression) => new Promise((resolve) => {
+          const evalId = ++requestCounter;
+          pendingToolRequests.set(evalId, {
+            socket: null,
+            originalId: null,
+            tool: "cdp_evaluate",
+            onComplete: (r) => resolve(r)
+          });
+          writeMessage({ type: "CHATGPT_EVALUATE", tabId, expression, id: evalId });
+        }),
+        cdpCommand: (tabId, method, params) => new Promise((resolve) => {
+          const cmdId = ++requestCounter;
+          pendingToolRequests.set(cmdId, {
+            socket: null,
+            originalId: null,
+            tool: "cdp_command",
+            onComplete: (r) => resolve(r)
+          });
+          writeMessage({ type: "CHATGPT_CDP_COMMAND", tabId, method, params, id: cmdId });
+        }),
+        log: (msg) => log(`[chatgpt] ${msg}`)
+      });
+      
+      return result;
+    }).then((result) => {
+      sendToolResponse(socket, originalId, {
+        response: result.response,
+        model: result.model,
+        tookMs: result.tookMs
+      }, null);
+    }).catch((err) => {
+      sendToolResponse(socket, originalId, null, err.message);
+    });
+    
+    return;
+  }
+  
+  if (extensionMsg.type === "GEMINI_QUERY") {
+    sendToolResponse(socket, originalId, null, "Gemini integration not yet implemented");
+    return;
+  }
+  
   if (extensionMsg.type === "EXECUTE_KEY_REPEAT") {
     const { key, repeat, tabId: tid } = extensionMsg;
     let completed = 0;
@@ -1093,8 +1271,10 @@ function handleToolRequest(msg, socket) {
     socket, 
     originalId, 
     tool, 
-    savePath: args?.savePath,
+    savePath: extensionMsg.savePath || args?.savePath,
     autoScreenshot: args?.autoScreenshot,
+    fullRes: extensionMsg.fullRes || args?.fullRes,
+    maxSize: extensionMsg.maxSize || args?.maxSize,
     tabId: extensionMsg.tabId || tabId
   };
   pendingToolRequests.set(id, pendingData);
@@ -1300,9 +1480,26 @@ function processInput() {
               const dir = path.dirname(savePath);
               if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
               fs.writeFileSync(savePath, Buffer.from(msg.base64, "base64"));
-              const dims = msg.width && msg.height ? `${msg.width}x${msg.height}` : "";
+              const origWidth = msg.width || 0;
+              const origHeight = msg.height || 0;
+              const maxSize = pending.maxSize || 1200;
+              const skipResize = pending.fullRes;
+              
+              let finalDims = origWidth && origHeight ? `${origWidth}x${origHeight}` : "";
+              if (!skipResize && (origWidth > maxSize || origHeight > maxSize)) {
+                try {
+                  const { execSync } = require("child_process");
+                  execSync(`sips --resampleHeightWidthMax ${maxSize} "${savePath}" --out "${savePath}" 2>/dev/null`, { stdio: "pipe" });
+                  const sizeInfo = execSync(`sips -g pixelWidth -g pixelHeight "${savePath}" 2>/dev/null`, { encoding: "utf8" });
+                  const newWidth = sizeInfo.match(/pixelWidth:\s*(\d+)/)?.[1] || "?";
+                  const newHeight = sizeInfo.match(/pixelHeight:\s*(\d+)/)?.[1] || "?";
+                  finalDims = `${newWidth}x${newHeight}, from ${origWidth}x${origHeight}`;
+                } catch (resizeErr) {
+                  finalDims = `${origWidth}x${origHeight}`;
+                }
+              }
               sendToolResponse(socket, originalId, { 
-                message: `Saved to ${savePath} (${dims})`
+                message: `Saved to ${savePath} (${finalDims})`
               }, null);
             } catch (e) {
               sendToolResponse(socket, originalId, null, `Failed to save: ${e.message}`);
@@ -1326,26 +1523,37 @@ function processInput() {
               originalId: null,
               tool: "screenshot",
               onComplete: (screenshotMsg) => {
-                
                 if (screenshotMsg.base64) {
                   try {
                     fs.writeFileSync(screenshotPath, Buffer.from(screenshotMsg.base64, "base64"));
-                    
+                    const origW = screenshotMsg.width || 0;
+                    const origH = screenshotMsg.height || 0;
+                    let finalW = origW, finalH = origH;
+                    const maxSize = 1200;
+                    if (origW > maxSize || origH > maxSize) {
+                      try {
+                        const { execSync } = require("child_process");
+                        execSync(`sips --resampleHeightWidthMax ${maxSize} "${screenshotPath}" --out "${screenshotPath}" 2>/dev/null`, { stdio: "pipe" });
+                        const sizeInfo = execSync(`sips -g pixelWidth -g pixelHeight "${screenshotPath}" 2>/dev/null`, { encoding: "utf8" });
+                        finalW = parseInt(sizeInfo.match(/pixelWidth:\s*(\d+)/)?.[1] || origW, 10);
+                        finalH = parseInt(sizeInfo.match(/pixelHeight:\s*(\d+)/)?.[1] || origH, 10);
+                      } catch (e) {}
+                    }
                     sendToolResponse(socket, originalId, {
                       ...msg,
-                      autoScreenshot: { path: screenshotPath, width: screenshotMsg.width, height: screenshotMsg.height }
+                      autoScreenshot: { path: screenshotPath, width: finalW, height: finalH, originalWidth: origW, originalHeight: origH }
                     }, null);
                   } catch (e) {
-                    
                     sendToolResponse(socket, originalId, { ...msg, autoScreenshotError: e.message }, null);
                   }
                 } else {
-                  
-                  sendToolResponse(socket, originalId, { ...msg, autoScreenshotError: "Failed to capture" }, null);
+                  const errMsg = screenshotMsg.error || "Failed to capture";
+                  sendToolResponse(socket, originalId, { ...msg, autoScreenshotError: errMsg }, null);
                 }
               }
             });
-            setTimeout(() => writeMessage({ type: "EXECUTE_SCREENSHOT", tabId, id: screenshotId }), 200);
+            setTimeout(() => writeMessage({ type: "EXECUTE_SCREENSHOT", tabId, id: screenshotId }), 500);
+            return;
           } else if (msg.results && msg.savePath) {
             try {
               const dir = msg.savePath;

@@ -2,6 +2,30 @@
 
 All notable changes to surf CLI will be documented in this file.
 
+## [2.1.0] - 2025-12-30
+
+### Added
+
+**ChatGPT Integration**
+- `chatgpt <query>` - Send prompt to ChatGPT using browser cookies (no API key)
+  - `--with-page` - Include current page context
+  - `--model` - Specify model (gpt-4o, o1, etc.)
+  - `--timeout` - Custom timeout (default: 45 minutes)
+  - File attachments coming soon
+
+**Gemini Integration (Coming Soon)**
+- `gemini <query>` - Command structure ready, implementation pending
+
+**Request Queue**
+- AI requests are queued sequentially with 2s minimum delay between requests
+- Prevents rate limiting when making multiple AI queries
+
+### Technical Changes
+- New `chatgpt-client.cjs` module for ChatGPT browser automation
+- Extension: `GET_CHATGPT_COOKIES`, `GET_GOOGLE_COOKIES` handlers
+- Extension: `CHATGPT_NEW_TAB`, `CHATGPT_CLOSE_TAB`, `CHATGPT_CDP_COMMAND`, `CHATGPT_EVALUATE` handlers
+- CDP controller: Added public `sendCommand()` method
+
 ## [2.0.0] - 2025-12-27
 
 ### Breaking Changes

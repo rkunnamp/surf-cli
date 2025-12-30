@@ -150,6 +150,17 @@ export class CDPController {
 
       this.handleCDPEvent(tabId, method, params);
     });
+
+    chrome.debugger.onDetach.addListener((source, reason) => {
+      const tabId = source.tabId;
+      if (tabId && this.targets.has(tabId)) {
+        this.targets.delete(tabId);
+        this.consoleMessages.delete(tabId);
+        this.networkRequests.delete(tabId);
+        this.consoleCallbacks.delete(tabId);
+        this.networkCallbacks.delete(tabId);
+      }
+    });
   }
 
   private handleCDPEvent(tabId: number, method: string, params: any): void {
@@ -661,6 +672,10 @@ export class CDPController {
     await this.ensureAttached(tabId);
     const target = this.targets.get(tabId)!;
     return chrome.debugger.sendCommand(target, method, params);
+  }
+
+  async sendCommand(tabId: number, method: string, params?: object): Promise<any> {
+    return this.send(tabId, method, params);
   }
 
   private async ensureAttached(tabId: number): Promise<void> {
