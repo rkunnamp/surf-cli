@@ -1554,6 +1554,11 @@ async function handleResponse(response) {
 
   if (response.error) {
     const errContent = response.error.content?.[0]?.text || JSON.stringify(response.error);
+    if (softFail) {
+      console.warn("Warning:", errContent);
+      socket.end();
+      process.exit(0);
+    }
     console.error("Error:", errContent);
 
     if (autoCapture) {

@@ -124,22 +124,6 @@ function base64ToBlob(base64: string, mimeType = "image/png"): Blob {
   return new Blob([bytes], { type: mimeType });
 }
 
-async function executeScriptWithFallback<T>(
-  tabId: number,
-  scriptFn: () => T
-): Promise<T> {
-  try {
-    const result = await cdp.evaluateScript(tabId, `(${scriptFn.toString()})()`);
-    return result.result?.value;
-  } catch (cdpError) {
-    const results = await chrome.scripting.executeScript({
-      target: { tabId },
-      func: scriptFn,
-    });
-    return results[0]?.result as T;
-  }
-}
-
 async function captureFullPage(tabId: number, maxHeight: number): Promise<{ base64: string; width: number; height: number }> {
   const dimensionsResult = await cdp.evaluateScript(tabId, `(() => ({
     viewportHeight: window.innerHeight,
@@ -710,15 +694,19 @@ async function handleMessage(
         const y = message.y ?? viewport.height / 2;
         await cdp.scroll(tabId, x, y, deltaX, deltaY);
       } catch {
-        const scrollFallback = (dx: number, dy: number) => {
-          window.scrollBy(dx, dy);
-          return { scrollX: window.scrollX, scrollY: window.scrollY };
-        };
-        await chrome.scripting.executeScript({
-          target: { tabId },
-          func: scrollFallback,
-          args: [deltaX, deltaY],
-        });
+        try {
+          const scrollFallback = (dx: number, dy: number) => {
+            window.scrollBy(dx, dy);
+            return { scrollX: window.scrollX, scrollY: window.scrollY };
+          };
+          await chrome.scripting.executeScript({
+            target: { tabId },
+            func: scrollFallback,
+            args: [deltaX, deltaY],
+          });
+        } catch {
+          return { error: "Cannot scroll on this page (restricted)" };
+        }
       }
       return { success: true };
     }
@@ -855,7 +843,7 @@ async function handleMessage(
       const selector = message.selector;
       
       const scrollScript = (pos: string | number, sel: string | null) => {
-        const findScrollable = () => {
+        const findScrollable = (): Element => {
           const candidates = [...document.querySelectorAll("*")].filter(el => 
             el.scrollHeight > el.clientHeight && el.clientHeight > 200
           ).sort((a,b) => b.scrollHeight - a.scrollHeight);
@@ -887,12 +875,16 @@ async function handleMessage(
         const result = await cdp.evaluateScript(tabId, script);
         return result.result?.value || { error: "Script failed" };
       } catch {
-        const results = await chrome.scripting.executeScript({
-          target: { tabId },
-          func: scrollScript,
-          args: [position, selector],
-        });
-        return results[0]?.result || { error: "Script failed" };
+        try {
+          const results = await chrome.scripting.executeScript({
+            target: { tabId },
+            func: scrollScript,
+            args: [position, selector],
+          });
+          return results[0]?.result || { error: "Script failed" };
+        } catch {
+          return { error: "Cannot scroll on this page (restricted)" };
+        }
       }
     }
 
@@ -901,7 +893,7 @@ async function handleMessage(
       const selector = message.selector;
       
       const scrollInfoScript = (sel: string | null) => {
-        const findScrollable = () => {
+        const findScrollable = (): Element => {
           const candidates = [...document.querySelectorAll("*")].filter(el => 
             el.scrollHeight > el.clientHeight && el.clientHeight > 200
           ).sort((a,b) => b.scrollHeight - a.scrollHeight);
@@ -927,12 +919,16 @@ async function handleMessage(
         const result = await cdp.evaluateScript(tabId, script);
         return result.result?.value || { error: "Script failed" };
       } catch {
-        const results = await chrome.scripting.executeScript({
-          target: { tabId },
-          func: scrollInfoScript,
-          args: [selector],
-        });
-        return results[0]?.result || { error: "Script failed" };
+        try {
+          const results = await chrome.scripting.executeScript({
+            target: { tabId },
+            func: scrollInfoScript,
+            args: [selector],
+          });
+          return results[0]?.result || { error: "Script failed" };
+        } catch {
+          return { error: "Cannot get scroll info on this page (restricted)" };
+        }
       }
     }
 
