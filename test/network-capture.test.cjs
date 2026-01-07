@@ -98,6 +98,9 @@ console.log("Setting up test environment...");
 run(`go "https://httpbin.org/get" --tab-id ${tabId}`);
 sleep(3000);
 
+// Enable network tracking before triggering fetches
+run(`network --tab-id ${tabId}`);
+
 // Trigger various requests for testing
 console.log("Generating test traffic...\n");
 run(`js "fetch('https://httpbin.org/headers')" --tab-id ${tabId}`);
