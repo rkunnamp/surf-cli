@@ -1882,6 +1882,9 @@ async function handleResponse(response) {
     
     if (items.length === 0) {
       console.log("No network requests captured");
+    } else if (data._format === 'raw') {
+      // Raw JSON output - print entries array directly
+      console.log(JSON.stringify(items, null, 2));
     } else {
       // Simple compact format for now
       for (const req of items) {

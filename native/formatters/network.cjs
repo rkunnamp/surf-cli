@@ -172,7 +172,8 @@ function formatCurlBatch(entries) {
  * Full JSON output
  */
 function formatRaw(entries) {
-  return JSON.stringify(entries, null, 2);
+  // Return as object with entries key so CLI can detect it
+  return JSON.stringify({ entries, _format: 'raw' }, null, 2);
 }
 
 /**

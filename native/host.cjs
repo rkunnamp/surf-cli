@@ -7,6 +7,7 @@ const https = require("https");
 const { GoogleGenerativeAI } = require("@google/generative-ai");
 const chatgptClient = require("./chatgpt-client.cjs");
 const networkFormatters = require("./formatters/network.cjs");
+const networkStore = require("./network-store.cjs");
 
 const SOCKET_PATH = "/tmp/surf.sock";
 
@@ -298,6 +299,19 @@ function formatToolContent(result) {
   // Handle both requests (basic) and entries (full) formats
   const items = result.requests || result.entries;
   if (items && Array.isArray(items)) {
+    // Persist entries with full data to disk
+    if (result.entries && items.length > 0) {
+      (async () => {
+        for (const entry of items) {
+          try {
+            await networkStore.appendEntry(entry);
+          } catch (err) {
+            log(`Failed to persist network entry: ${err.message}`);
+          }
+        }
+      })();
+    }
+    
     if (items.length === 0) {
       return text("No network requests captured");
     }
@@ -639,7 +653,7 @@ function mapToolToMessage(tool, args, tabId) {
     case "get_network_entries":
       return { 
         type: "READ_NETWORK_REQUESTS",
-        full: a.v || a.vv || a.format === 'curl' || a.format === 'verbose',
+        full: a.v || a.vv || a.format === 'curl' || a.format === 'verbose' || a.format === 'raw',
         urlPattern: a.filter || a.url_pattern || a.origin,
         method: a.method,
         status: a.status,
