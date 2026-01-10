@@ -254,4 +254,84 @@ describe("CDPController", () => {
       expect(mockChrome.debugger.detach).toHaveBeenCalledTimes(3);
     });
   });
+
+  describe("emulateNetwork", () => {
+    let controller: CDPController;
+    const tabId = 400;
+
+    beforeEach(() => {
+      controller = new CDPController();
+      mockChrome.debugger.attach.mockResolvedValue(undefined);
+      mockChrome.debugger.sendCommand.mockResolvedValue({});
+    });
+
+    it("returns error for unknown preset", async () => {
+      const result = await controller.emulateNetwork(tabId, "unknown-preset");
+
+      expect(result.success).toBe(false);
+      expect(result.error).toContain("Unknown preset");
+    });
+
+    it("applies offline preset", async () => {
+      const result = await controller.emulateNetwork(tabId, "offline");
+
+      expect(result.success).toBe(true);
+      expect(mockChrome.debugger.sendCommand).toHaveBeenCalledWith(
+        { tabId },
+        "Network.emulateNetworkConditions",
+        { offline: true, latency: 0, downloadThroughput: 0, uploadThroughput: 0 },
+      );
+    });
+
+    it("applies slow-3g preset", async () => {
+      const result = await controller.emulateNetwork(tabId, "slow-3g");
+
+      expect(result.success).toBe(true);
+      expect(mockChrome.debugger.sendCommand).toHaveBeenCalledWith(
+        { tabId },
+        "Network.emulateNetworkConditions",
+        { offline: false, latency: 2000, downloadThroughput: 50000, uploadThroughput: 50000 },
+      );
+    });
+
+    it("applies reset preset", async () => {
+      const result = await controller.emulateNetwork(tabId, "reset");
+
+      expect(result.success).toBe(true);
+      expect(mockChrome.debugger.sendCommand).toHaveBeenCalledWith(
+        { tabId },
+        "Network.emulateNetworkConditions",
+        { offline: false, latency: 0, downloadThroughput: -1, uploadThroughput: -1 },
+      );
+    });
+  });
+
+  describe("emulateCPU", () => {
+    let controller: CDPController;
+    const tabId = 500;
+
+    beforeEach(() => {
+      controller = new CDPController();
+      mockChrome.debugger.attach.mockResolvedValue(undefined);
+      mockChrome.debugger.sendCommand.mockResolvedValue({});
+    });
+
+    it("returns error for rate less than 1", async () => {
+      const result = await controller.emulateCPU(tabId, 0.5);
+
+      expect(result.success).toBe(false);
+      expect(result.error).toContain("rate must be >= 1");
+    });
+
+    it("applies cpu throttling rate", async () => {
+      const result = await controller.emulateCPU(tabId, 4);
+
+      expect(result.success).toBe(true);
+      expect(mockChrome.debugger.sendCommand).toHaveBeenCalledWith(
+        { tabId },
+        "Emulation.setCPUThrottlingRate",
+        { rate: 4 },
+      );
+    });
+  });
 });
