@@ -334,4 +334,59 @@ describe("CDPController", () => {
       );
     });
   });
+
+  describe("emulateGeolocation", () => {
+    let controller: CDPController;
+    const tabId = 600;
+
+    beforeEach(() => {
+      controller = new CDPController();
+      mockChrome.debugger.attach.mockResolvedValue(undefined);
+      mockChrome.debugger.sendCommand.mockResolvedValue({});
+    });
+
+    it("sets geolocation with default accuracy", async () => {
+      const result = await controller.emulateGeolocation(tabId, 37.7749, -122.4194);
+
+      expect(result.success).toBe(true);
+      expect(mockChrome.debugger.sendCommand).toHaveBeenCalledWith(
+        { tabId },
+        "Emulation.setGeolocationOverride",
+        { latitude: 37.7749, longitude: -122.4194, accuracy: 100 },
+      );
+    });
+
+    it("sets geolocation with custom accuracy", async () => {
+      const result = await controller.emulateGeolocation(tabId, 51.5074, -0.1278, 50);
+
+      expect(result.success).toBe(true);
+      expect(mockChrome.debugger.sendCommand).toHaveBeenCalledWith(
+        { tabId },
+        "Emulation.setGeolocationOverride",
+        { latitude: 51.5074, longitude: -0.1278, accuracy: 50 },
+      );
+    });
+  });
+
+  describe("clearGeolocation", () => {
+    let controller: CDPController;
+    const tabId = 700;
+
+    beforeEach(() => {
+      controller = new CDPController();
+      mockChrome.debugger.attach.mockResolvedValue(undefined);
+      mockChrome.debugger.sendCommand.mockResolvedValue({});
+    });
+
+    it("clears geolocation override", async () => {
+      const result = await controller.clearGeolocation(tabId);
+
+      expect(result.success).toBe(true);
+      expect(mockChrome.debugger.sendCommand).toHaveBeenCalledWith(
+        { tabId },
+        "Emulation.clearGeolocationOverride",
+        undefined,
+      );
+    });
+  });
 });
