@@ -1728,7 +1728,12 @@ async function handleMessage(
     }
 
     case "LIST_TABS": {
-      const tabs = await chrome.tabs.query({});
+      const queryOptions: chrome.tabs.QueryInfo = {};
+      // Support filtering by window
+      if (message.windowId) {
+        queryOptions.windowId = message.windowId;
+      }
+      const tabs = await chrome.tabs.query(queryOptions);
       return {
         tabs: tabs.map((t) => ({
           id: t.id,
@@ -1744,10 +1749,15 @@ async function handleMessage(
       const urls = message.urls || (message.url ? [message.url] : ["about:blank"]);
       const createdTabs = [];
       for (let i = 0; i < urls.length; i++) {
-        const newTab = await chrome.tabs.create({
+        const createOptions: chrome.tabs.CreateProperties = {
           url: urls[i],
           active: i === 0,
-        });
+        };
+        // Support creating tab in specific window
+        if (message.windowId) {
+          createOptions.windowId = message.windowId;
+        }
+        const newTab = await chrome.tabs.create(createOptions);
         if (newTab.id) createdTabs.push({ tabId: newTab.id, url: urls[i] });
       }
       if (createdTabs.length === 1) {
@@ -2366,6 +2376,101 @@ async function handleMessage(
       return { cookies: Array.from(seen.values()) };
     }
 
+    case "WINDOW_NEW": {
+      // Default to a usable blank page if no URL provided
+      const url = message.url || 'data:text/html,<html><head><title>Surf Agent</title></head><body style="font-family:system-ui;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;color:%23666"><div style="text-align:center"><h2>Agent Window</h2><p>Ready for automation</p></div></body></html>';
+      
+      const createOptions: chrome.windows.CreateData = {
+        focused: message.focused !== false,
+        type: "normal",
+        url,
+      };
+      
+      if (message.width && message.height) {
+        createOptions.width = message.width;
+        createOptions.height = message.height;
+      }
+      
+      if (message.incognito) {
+        createOptions.incognito = true;
+      }
+      
+      const window = await chrome.windows.create(createOptions);
+      
+      if (!window.id) throw new Error("Failed to create window");
+      
+      // Get the tab that was created with the window
+      const tabs = await chrome.tabs.query({ windowId: window.id });
+      const firstTab = tabs[0];
+      
+      // Wait for tab to be ready
+      if (firstTab?.id) {
+        await new Promise(r => setTimeout(r, 150));
+      }
+      
+      return { 
+        success: true, 
+        windowId: window.id, 
+        tabId: firstTab?.id,
+        hint: `Use --window-id ${window.id} to target this window`,
+      };
+    }
+
+    case "WINDOW_LIST": {
+      const windows = await chrome.windows.getAll({ populate: true });
+      
+      return {
+        windows: windows.map(w => ({
+          id: w.id,
+          focused: w.focused,
+          type: w.type,
+          state: w.state,
+          width: w.width,
+          height: w.height,
+          tabCount: w.tabs?.length || 0,
+          tabs: message.includeTabs ? w.tabs?.map(t => ({
+            id: t.id,
+            title: t.title,
+            url: t.url,
+            active: t.active,
+          })) : undefined,
+        }))
+      };
+    }
+
+    case "WINDOW_FOCUS": {
+      if (!message.windowId) throw new Error("No windowId provided");
+      
+      await chrome.windows.update(message.windowId, { focused: true });
+      return { success: true, windowId: message.windowId };
+    }
+
+    case "WINDOW_CLOSE": {
+      if (!message.windowId) throw new Error("No windowId provided");
+      
+      await chrome.windows.remove(message.windowId);
+      return { success: true, windowId: message.windowId };
+    }
+
+    case "WINDOW_RESIZE": {
+      if (!message.windowId) throw new Error("No windowId provided");
+      
+      const updateInfo: chrome.windows.UpdateInfo = {};
+      if (message.width) updateInfo.width = message.width;
+      if (message.height) updateInfo.height = message.height;
+      if (message.left !== undefined) updateInfo.left = message.left;
+      if (message.top !== undefined) updateInfo.top = message.top;
+      if (message.state) updateInfo.state = message.state as chrome.windows.windowStateEnum;
+      
+      const window = await chrome.windows.update(message.windowId, updateInfo);
+      return { 
+        success: true, 
+        windowId: message.windowId,
+        width: window.width,
+        height: window.height,
+      };
+    }
+
     default:
       throw new Error(`Unknown message type: ${message.type}`);
   }
@@ -2383,13 +2488,16 @@ const COMMANDS_WITHOUT_TAB = new Set([
   "DELETE_BOOKMARK", "DIALOG_DISMISS", "DIALOG_ACCEPT", "DIALOG_INFO",
   "CHATGPT_NEW_TAB", "CHATGPT_CLOSE_TAB", "CHATGPT_EVALUATE", "CHATGPT_CDP_COMMAND",
   "GET_CHATGPT_COOKIES", "GET_GOOGLE_COOKIES",
-  "PERPLEXITY_NEW_TAB", "PERPLEXITY_CLOSE_TAB", "PERPLEXITY_EVALUATE", "PERPLEXITY_CDP_COMMAND"
+  "PERPLEXITY_NEW_TAB", "PERPLEXITY_CLOSE_TAB", "PERPLEXITY_EVALUATE", "PERPLEXITY_CDP_COMMAND",
+  "WINDOW_NEW", "WINDOW_LIST", "WINDOW_FOCUS", "WINDOW_CLOSE", "WINDOW_RESIZE"
 ]);
 
 initNativeMessaging(async (msg) => {
   let tabId = msg.tabId;
+  const windowId = msg.windowId;
   const isDialogCommand = msg.type?.startsWith("DIALOG_");
   const needsTab = !COMMANDS_WITHOUT_TAB.has(msg.type);
+  let autoCreatedTab = false;
   
   if (tabId && !isDialogCommand) {
     try {
@@ -2398,21 +2506,69 @@ initNativeMessaging(async (msg) => {
       throw new Error(`Invalid tab ID: ${tabId}. Use 'surf tab.list' to see available tabs.`);
     }
   } else if (!tabId && needsTab) {
-    let tabs = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
-    let tab: chrome.tabs.Tab | undefined = tabs[0];
-    if (!tab || tab.url?.startsWith('chrome-extension://')) {
-      tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+    let tabs: chrome.tabs.Tab[];
+    let tab: chrome.tabs.Tab | undefined;
+    
+    if (windowId) {
+      // If windowId specified, only look in that window
+      tabs = await chrome.tabs.query({ active: true, windowId });
       tab = tabs[0];
-    }
-    if (!tab || tab.url?.startsWith('chrome-extension://') || tab.url?.startsWith('chrome://')) {
-      tabs = await chrome.tabs.query({ active: true });
-      tab = tabs.find(t => !t.url?.startsWith('chrome-extension://') && !t.url?.startsWith('chrome://'));
-    }
-    if (!tab?.id) {
-      throw new Error("No active tab found. Use 'surf tab.new <url>' to create one, or 'surf tab.list' to see available tabs.");
+      
+      // Check if active tab is usable (not a restricted URL)
+      const isRestricted = (url?: string) => 
+        !url || url.startsWith('chrome://') || url.startsWith('chrome-extension://') || url === 'about:blank';
+      
+      if (!tab || isRestricted(tab.url)) {
+        // Active tab is restricted, find any usable tab in the window
+        tabs = await chrome.tabs.query({ windowId });
+        tab = tabs.find(t => !isRestricted(t.url));
+      }
+      
+      if (!tab?.id) {
+        // No usable tab - auto-create one with a minimal page
+        const newTab = await chrome.tabs.create({ 
+          windowId, 
+          url: 'data:text/html,<html><head><title>Surf</title></head><body></body></html>',
+          active: true 
+        });
+        if (!newTab.id) {
+          throw new Error(`Failed to create tab in window ${windowId}`);
+        }
+        // Wait briefly for tab to be ready
+        await new Promise(r => setTimeout(r, 100));
+        tab = newTab;
+        autoCreatedTab = true;
+      }
+    } else {
+      // Default behavior: find active tab across windows
+      tabs = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+      tab = tabs[0];
+      if (!tab || tab.url?.startsWith('chrome-extension://')) {
+        tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+        tab = tabs[0];
+      }
+      if (!tab || tab.url?.startsWith('chrome-extension://') || tab.url?.startsWith('chrome://')) {
+        tabs = await chrome.tabs.query({ active: true });
+        tab = tabs.find(t => !t.url?.startsWith('chrome-extension://') && !t.url?.startsWith('chrome://'));
+      }
+      if (!tab?.id) {
+        throw new Error("No active tab found. Use 'surf tab.new <url>' to create one, or 'surf tab.list' to see available tabs.");
+      }
     }
     tabId = tab.id;
   }
+  
   const result = await handleMessage({ ...msg, tabId }, {} as chrome.runtime.MessageSender);
-  return { ...result, _resolvedTabId: tabId };
+  
+  // Add helpful hints based on what happened
+  const hints: string[] = [];
+  if (autoCreatedTab) {
+    hints.push(`Auto-created tab in window ${windowId} (no usable tabs existed). Navigate to your target URL.`);
+  }
+  
+  return { 
+    ...result, 
+    _resolvedTabId: tabId,
+    _hint: hints.length > 0 ? hints.join(' ') : undefined,
+  };
 });

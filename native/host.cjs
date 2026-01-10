@@ -4,6 +4,7 @@ const fs = require("fs");
 const path = require("path");
 const os = require("os");
 const https = require("https");
+const { execSync } = require("child_process");
 const { GoogleGenerativeAI } = require("@google/generative-ai");
 const chatgptClient = require("./chatgpt-client.cjs");
 const geminiClient = require("./gemini-client.cjs");
@@ -12,6 +13,41 @@ const networkFormatters = require("./formatters/network.cjs");
 const networkStore = require("./network-store.cjs");
 
 const SOCKET_PATH = "/tmp/surf.sock";
+
+// Cross-platform image resize (macOS: sips, Linux: ImageMagick)
+function resizeImage(filePath, maxSize) {
+  const platform = process.platform;
+  
+  try {
+    if (platform === "darwin") {
+      // macOS: use sips
+      execSync(`sips --resampleHeightWidthMax ${maxSize} "${filePath}" --out "${filePath}" 2>/dev/null`, { stdio: "pipe" });
+      const sizeInfo = execSync(`sips -g pixelWidth -g pixelHeight "${filePath}" 2>/dev/null`, { encoding: "utf8" });
+      const width = parseInt(sizeInfo.match(/pixelWidth:\s*(\d+)/)?.[1] || "0", 10);
+      const height = parseInt(sizeInfo.match(/pixelHeight:\s*(\d+)/)?.[1] || "0", 10);
+      return { success: true, width, height };
+    } else {
+      // Linux/other: use ImageMagick (try IM6 first, then IM7)
+      try {
+        execSync(`convert "${filePath}" -resize ${maxSize}x${maxSize}\\> "${filePath}"`, { stdio: "pipe" });
+      } catch {
+        // IM7 uses 'magick' as main command
+        execSync(`magick "${filePath}" -resize ${maxSize}x${maxSize}\\> "${filePath}"`, { stdio: "pipe" });
+      }
+      // Get dimensions (IM7 may need 'magick identify' instead of just 'identify')
+      let sizeInfo;
+      try {
+        sizeInfo = execSync(`identify -format "%w %h" "${filePath}"`, { encoding: "utf8" });
+      } catch {
+        sizeInfo = execSync(`magick identify -format "%w %h" "${filePath}"`, { encoding: "utf8" });
+      }
+      const [width, height] = sizeInfo.trim().split(" ").map(Number);
+      return { success: true, width, height };
+    }
+  } catch (e) {
+    return { success: false, error: e.message };
+  }
+}
 
 const aiRequestQueue = [];
 let aiRequestInProgress = false;
@@ -417,6 +453,21 @@ function formatToolContent(result) {
     
     return text(output);
   }
+
+  // Window commands - check before generic tabs check
+  if (result.windowId !== undefined && result.success) {
+    // window.new, window.focus, window.close, window.resize
+    let msg = `Window ${result.windowId}`;
+    if (result.tabId) msg += ` (tab ${result.tabId})`;
+    if (result.width && result.height) msg += ` ${result.width}x${result.height}`;
+    if (result.hint) msg += `\n${result.hint}`;
+    return text(msg);
+  }
+
+  if (result.windows) {
+    // window.list - preserve structure for CLI formatting (exclude internal id)
+    return text(JSON.stringify({ windows: result.windows }, null, 2));
+  }
   
   if (result.tabs) {
     return text(JSON.stringify(result.tabs, null, 2));
@@ -572,8 +623,20 @@ function formatToolContent(result) {
   if (result.value !== undefined) {
     return text(typeof result.value === "string" ? result.value : JSON.stringify(result.value, null, 2));
   }
+
+  // Handle success with optional hint
+  if (result.success === true) {
+    let msg = "OK";
+    if (result._hint) msg += `\n[hint] ${result._hint}`;
+    return text(msg);
+  }
   
-  return text(JSON.stringify(result));
+  // Strip internal fields before JSON output
+  const { _resolvedTabId, _hint, ...cleanResult } = result;
+  if (_hint) {
+    return text(JSON.stringify(cleanResult) + `\n[hint] ${_hint}`);
+  }
+  return text(JSON.stringify(cleanResult));
 }
 
 function mapToolToMessage(tool, args, tabId) {
@@ -1022,6 +1085,34 @@ function mapToolToMessage(tool, args, tabId) {
         timeout: a.timeout ? parseInt(a.timeout, 10) * 1000 : 120000,
         ...baseMsg
       };
+    case "window.new":
+      return { 
+        type: "WINDOW_NEW", 
+        url: a.url, 
+        width: a.width ? parseInt(a.width, 10) : undefined,
+        height: a.height ? parseInt(a.height, 10) : undefined,
+        incognito: a.incognito || false,
+        focused: a.unfocused ? false : true,
+      };
+    case "window.list":
+      return { type: "WINDOW_LIST", includeTabs: a.tabs || false };
+    case "window.focus":
+      if (!a.id) throw new Error("window id required");
+      return { type: "WINDOW_FOCUS", windowId: parseInt(a.id, 10) };
+    case "window.close":
+      if (!a.id) throw new Error("window id required");
+      return { type: "WINDOW_CLOSE", windowId: parseInt(a.id, 10) };
+    case "window.resize":
+      if (!a.id) throw new Error("--id required");
+      return { 
+        type: "WINDOW_RESIZE", 
+        windowId: parseInt(a.id, 10),
+        width: a.width ? parseInt(a.width, 10) : undefined,
+        height: a.height ? parseInt(a.height, 10) : undefined,
+        left: a.left !== undefined ? parseInt(a.left, 10) : undefined,
+        top: a.top !== undefined ? parseInt(a.top, 10) : undefined,
+        state: a.state,
+      };
     default:
       return null;
   }
@@ -1165,7 +1256,21 @@ function handleToolRequest(msg, socket) {
   }
   
   const { tool, args } = params || {};
-  const tabId = msg.tabId || params?.tabId || args?.tabId;
+  const rawTabId = msg.tabId || params?.tabId || args?.tabId;
+  const tabId = rawTabId !== undefined ? parseInt(rawTabId, 10) : undefined;
+  const rawWindowId = msg.windowId || params?.windowId || args?.windowId;
+  const windowId = rawWindowId !== undefined ? parseInt(rawWindowId, 10) : undefined;
+  
+  // Validate parsed IDs
+  if (tabId !== undefined && isNaN(tabId)) {
+    sendToolResponse(socket, originalId, null, "tabId must be a number");
+    return;
+  }
+  if (windowId !== undefined && isNaN(windowId)) {
+    sendToolResponse(socket, originalId, null, "windowId must be a number");
+    return;
+  }
+  
   if (!tool) {
     sendToolResponse(socket, originalId, null, "No tool specified");
     return;
@@ -1583,7 +1688,10 @@ function handleToolRequest(msg, socket) {
   };
   pendingToolRequests.set(id, pendingData);
   
-  writeMessage({ ...extensionMsg, id });
+  // Include windowId for tab resolution scoping
+  const finalMsg = { ...extensionMsg, id };
+  if (windowId) finalMsg.windowId = windowId;
+  writeMessage(finalMsg);
 }
 
 function executeBatch(actions, tabId, socket, originalId) {
@@ -1791,15 +1899,9 @@ function processInput() {
               
               let finalDims = origWidth && origHeight ? `${origWidth}x${origHeight}` : "";
               if (!skipResize && (origWidth > maxSize || origHeight > maxSize)) {
-                try {
-                  const { execSync } = require("child_process");
-                  execSync(`sips --resampleHeightWidthMax ${maxSize} "${savePath}" --out "${savePath}" 2>/dev/null`, { stdio: "pipe" });
-                  const sizeInfo = execSync(`sips -g pixelWidth -g pixelHeight "${savePath}" 2>/dev/null`, { encoding: "utf8" });
-                  const newWidth = sizeInfo.match(/pixelWidth:\s*(\d+)/)?.[1] || "?";
-                  const newHeight = sizeInfo.match(/pixelHeight:\s*(\d+)/)?.[1] || "?";
-                  finalDims = `${newWidth}x${newHeight}, from ${origWidth}x${origHeight}`;
-                } catch (resizeErr) {
-                  finalDims = `${origWidth}x${origHeight}`;
+                const result = resizeImage(savePath, maxSize);
+                if (result.success) {
+                  finalDims = `${result.width}x${result.height}, from ${origWidth}x${origHeight}`;
                 }
               }
               sendToolResponse(socket, originalId, { 
@@ -1835,13 +1937,11 @@ function processInput() {
                     let finalW = origW, finalH = origH;
                     const maxSize = 1200;
                     if (origW > maxSize || origH > maxSize) {
-                      try {
-                        const { execSync } = require("child_process");
-                        execSync(`sips --resampleHeightWidthMax ${maxSize} "${screenshotPath}" --out "${screenshotPath}" 2>/dev/null`, { stdio: "pipe" });
-                        const sizeInfo = execSync(`sips -g pixelWidth -g pixelHeight "${screenshotPath}" 2>/dev/null`, { encoding: "utf8" });
-                        finalW = parseInt(sizeInfo.match(/pixelWidth:\s*(\d+)/)?.[1] || origW, 10);
-                        finalH = parseInt(sizeInfo.match(/pixelHeight:\s*(\d+)/)?.[1] || origH, 10);
-                      } catch (e) {}
+                      const result = resizeImage(screenshotPath, maxSize);
+                      if (result.success) {
+                        finalW = result.width;
+                        finalH = result.height;
+                      }
                     }
                     sendToolResponse(socket, originalId, {
                       ...msg,
@@ -1912,8 +2012,22 @@ process.stdin.on("readable", () => {
   }
 });
 
+// Track connected CLI sockets for disconnect notification
+const connectedSockets = new Set();
+
 process.stdin.on("end", () => {
-  log("stdin ended, exiting");
+  log("stdin ended (extension disconnected), notifying clients");
+  for (const socket of Array.from(connectedSockets)) {
+    try {
+      socket.write(JSON.stringify({ 
+        type: "extension_disconnected",
+        message: "Surf extension was reloaded. Restart your command."
+      }) + "\n");
+      socket.end();
+    } catch (e) {
+      // Socket may already be closed
+    }
+  }
   process.exit(0);
 });
 
@@ -1927,6 +2041,9 @@ process.stdout.on("error", (err) => {
 
 const server = net.createServer((socket) => {
   log("CLI client connected");
+  connectedSockets.add(socket);
+  socket.on("close", () => connectedSockets.delete(socket));
+  
   let dataBuffer = "";
 
   socket.on("data", (data) => {

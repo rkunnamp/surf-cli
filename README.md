@@ -154,6 +154,27 @@ surf tab.switch "dashboard"         # Switch by name
 surf tab.group --name "Work" --color blue
 ```
 
+### Window Isolation
+
+Keep using your browser while the agent works in a separate window:
+
+```bash
+# Create isolated window for agent
+surf window.new "https://example.com"
+# Returns: Window 123456 (tab 789)
+
+# All subsequent commands target that window
+surf click e5 --window-id 123456
+surf read --window-id 123456
+surf tab.new "https://other.com" --window-id 123456
+
+# Or manage windows directly
+surf window.list                    # List all windows
+surf window.list --tabs             # Include tab details
+surf window.focus 123456            # Bring window to front
+surf window.close 123456            # Close window
+```
+
 ### AI Queries (No API Keys)
 
 Query AI models using your browser's logged-in session:
@@ -238,11 +259,12 @@ Auto-cleanup: 24 hours TTL, 200MB max.
 ## Global Options
 
 ```bash
---tab-id <id>     # Target specific tab
---json            # Output raw JSON
---soft-fail       # Warn instead of error (exit 0) on restricted pages
---no-screenshot   # Skip auto-screenshot after actions
---full            # Full resolution screenshots (skip resize)
+--tab-id <id>      # Target specific tab
+--window-id <id>   # Target specific window (isolate agent from your browsing)
+--json             # Output raw JSON
+--soft-fail        # Warn instead of error (exit 0) on restricted pages
+--no-screenshot    # Skip auto-screenshot after actions
+--full             # Full resolution screenshots (skip resize)
 --network-path <path>  # Custom path for network logs (default: /tmp/surf, or SURF_NETWORK_PATH env)
 ```
 
@@ -258,6 +280,7 @@ echo '{"type":"tool_request","method":"execute_tool","params":{"tool":"tab.list"
 
 | Group | Commands |
 |-------|----------|
+| `window.*` | `new`, `list`, `focus`, `close`, `resize` |
 | `tab.*` | `list`, `new`, `switch`, `close`, `name`, `unname`, `named`, `group`, `ungroup`, `groups`, `reload` |
 | `scroll.*` | `top`, `bottom`, `to`, `info` |
 | `page.*` | `read`, `text`, `state` |
@@ -291,6 +314,27 @@ Surf uses Chrome DevTools Protocol for most operations, with automatic fallback 
 - Cannot automate `chrome://` pages or the Chrome Web Store (Chrome restriction)
 - First CDP operation on a new tab takes ~100-500ms (debugger attachment)
 - Some operations on restricted pages return warnings instead of results
+
+## Linux Support (Experimental)
+
+Surf should work on Linux with Chromium. Not yet tested in production.
+
+```bash
+# Install dependencies
+sudo apt install chromium-browser nodejs npm imagemagick
+
+# For headless server: add Xvfb + VNC
+sudo apt install xvfb tigervnc-standalone-server
+
+# Install Surf and native host
+npm install -g surf-cli
+surf install <extension-id> --browser chromium
+```
+
+**Notes:**
+- Use Chromium (no official Chrome for Linux ARM64)
+- Screenshot resize uses ImageMagick instead of macOS `sips`
+- Headless servers need Xvfb + VNC for initial login setup
 
 ## Development
 

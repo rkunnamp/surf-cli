@@ -1,11 +1,47 @@
 #!/usr/bin/env node
 const net = require("net");
 const fs = require("fs");
+const { execSync } = require("child_process");
 const { loadConfig, getConfigPath, createStarterConfig } = require("./config.cjs");
 const networkFormatters = require("./formatters/network.cjs");
 const networkStore = require("./network-store.cjs");
 
 const SOCKET_PATH = "/tmp/surf.sock";
+
+// Cross-platform image resize (macOS: sips, Linux: ImageMagick)
+function resizeImage(filePath, maxSize) {
+  const platform = process.platform;
+  
+  try {
+    if (platform === "darwin") {
+      // macOS: use sips
+      execSync(`sips --resampleHeightWidthMax ${maxSize} "${filePath}" --out "${filePath}" 2>/dev/null`, { stdio: "pipe" });
+      const sizeInfo = execSync(`sips -g pixelWidth -g pixelHeight "${filePath}" 2>/dev/null`, { encoding: "utf8" });
+      const width = parseInt(sizeInfo.match(/pixelWidth:\s*(\d+)/)?.[1] || "0", 10);
+      const height = parseInt(sizeInfo.match(/pixelHeight:\s*(\d+)/)?.[1] || "0", 10);
+      return { success: true, width, height };
+    } else {
+      // Linux/other: use ImageMagick (try IM6 first, then IM7)
+      try {
+        execSync(`convert "${filePath}" -resize ${maxSize}x${maxSize}\\> "${filePath}"`, { stdio: "pipe" });
+      } catch {
+        // IM7 uses 'magick' as main command
+        execSync(`magick "${filePath}" -resize ${maxSize}x${maxSize}\\> "${filePath}"`, { stdio: "pipe" });
+      }
+      // Get dimensions (IM7 may need 'magick identify' instead of just 'identify')
+      let sizeInfo;
+      try {
+        sizeInfo = execSync(`identify -format "%w %h" "${filePath}"`, { encoding: "utf8" });
+      } catch {
+        sizeInfo = execSync(`magick identify -format "%w %h" "${filePath}"`, { encoding: "utf8" });
+      }
+      const [width, height] = sizeInfo.trim().split(" ").map(Number);
+      return { success: true, width, height };
+    }
+  } catch (e) {
+    return { success: false, error: e.message };
+  }
+}
 const args = process.argv.slice(2);
 const VERSION = "2.0.0";
 
@@ -650,6 +686,59 @@ const TOOLS = {
       },
     }
   },
+  window: {
+    desc: "Window management (isolate agent from your browsing)",
+    commands: {
+      "window.new": { 
+        desc: "Create new browser window", 
+        args: ["url"], 
+        opts: { 
+          width: "Window width",
+          height: "Window height",
+          incognito: "Open incognito window",
+          unfocused: "Don't focus the new window"
+        },
+        examples: [
+          { cmd: 'window.new "https://example.com"', desc: "New window with URL" },
+          { cmd: 'window.new --width 1280 --height 720', desc: "Sized window" },
+          { cmd: 'window.new --incognito', desc: "Incognito window" },
+        ]
+      },
+      "window.list": { 
+        desc: "List all browser windows", 
+        args: [],
+        opts: { tabs: "Include tab details" },
+        examples: [{ cmd: "window.list", desc: "Show all windows" }]
+      },
+      "window.focus": { 
+        desc: "Focus a window by ID", 
+        args: ["id"],
+        examples: [{ cmd: "window.focus 123", desc: "Focus window" }]
+      },
+      "window.close": { 
+        desc: "Close a window by ID", 
+        args: ["id"],
+        examples: [{ cmd: "window.close 123", desc: "Close window" }]
+      },
+      "window.resize": { 
+        desc: "Resize or reposition a window", 
+        args: [], 
+        opts: { 
+          id: "Window ID (required)", 
+          width: "Window width", 
+          height: "Window height",
+          left: "Window X position",
+          top: "Window Y position",
+          state: "Window state: normal, minimized, maximized, fullscreen"
+        },
+        examples: [
+          { cmd: "window.resize --id 123 --width 1920 --height 1080", desc: "Resize" },
+          { cmd: "window.resize --id 123 --left 0 --top 0", desc: "Move to corner" },
+          { cmd: "window.resize --id 123 --state maximized", desc: "Maximize" },
+        ]
+      },
+    }
+  },
 };
 
 const HELP_TOPICS = {
@@ -749,6 +838,32 @@ Scroll and capture:
   scroll.bottom
   screenshot --fullpage --output full.png`
   },
+  windows: {
+    title: "Window Isolation",
+    content: `Keep agent work separate from your browsing.
+
+Start a session:
+  surf window.new "https://example.com"
+  # Returns: Window 123 (tab 456)
+  # Use --window-id 123 to target this window
+
+All commands in that window:
+  surf navigate "https://other.com" --window-id 123
+  surf read --window-id 123
+  surf click e5 --window-id 123
+  surf screenshot --output /tmp/shot.png --window-id 123
+
+Manage windows:
+  surf window.list              # List all windows
+  surf window.list --tabs       # Include tab details  
+  surf window.focus 123         # Bring window to front
+  surf window.close 123         # Close when done
+
+Tips:
+  - Agent commands won't affect your active browser window
+  - If window has no usable tabs, one is auto-created
+  - Use window.new --incognito for isolated cookies/sessions`
+  },
 };
 
 const ALL_SOCKET_TOOLS = [
@@ -780,6 +895,7 @@ const ALL_SOCKET_TOOLS = [
   "back", "forward",
   "bookmark.add", "bookmark.remove", "bookmark.list",
   "history.list", "history.search",
+  "window.new", "window.list", "window.focus", "window.close", "window.resize",
 ];
 
 const showBasicHelp = () => {
@@ -832,6 +948,7 @@ Usage: surf <command> [args] [options]
 
 Options:
   --tab-id <id>     Target specific tab
+  --window-id <id>  Target specific window (isolate from your browsing)
   --json            Output raw JSON
   --auto-capture    On error: capture screenshot + console to /tmp
   --soft-fail       On error: warn and exit 0 (for non-critical commands)
@@ -1433,6 +1550,9 @@ const PRIMARY_ARG_MAP = {
   "network.body": "id",
   "network.curl": "id",
   "network.path": "id",
+  "window.new": "url",
+  "window.focus": "id",
+  "window.close": "id",
 };
 
 const toolArgs = { ...options };
@@ -1476,8 +1596,22 @@ if (toolArgs.into && !toolArgs.selector) {
 
 const globalOpts = {};
 if (toolArgs["tab-id"] !== undefined) {
-  globalOpts.tabId = toolArgs["tab-id"];
+  const tid = parseInt(toolArgs["tab-id"], 10);
+  if (isNaN(tid)) {
+    console.error("Error: --tab-id must be a number");
+    process.exit(1);
+  }
+  globalOpts.tabId = tid;
   delete toolArgs["tab-id"];
+}
+if (toolArgs["window-id"] !== undefined) {
+  const wid = parseInt(toolArgs["window-id"], 10);
+  if (isNaN(wid)) {
+    console.error("Error: --window-id must be a number");
+    process.exit(1);
+  }
+  globalOpts.windowId = wid;
+  delete toolArgs["window-id"];
 }
 if (toolArgs["network-path"] !== undefined) {
   networkStore.setBasePath(toolArgs["network-path"]);
@@ -1604,6 +1738,11 @@ if (streamMode && (tool === "console" || tool === "network")) {
           sock.end();
           process.exit(1);
         }
+        if (msg.type === "extension_disconnected") {
+          console.error(msg.message);
+          sock.end();
+          process.exit(1);
+        }
         if (msg.type === "stream_started") {
           continue;
         }
@@ -1669,6 +1808,11 @@ const sendRequest = (toolName, toolArgs = {}) => {
         if (!line.trim()) continue;
         try {
           const resp = JSON.parse(line);
+          if (resp.type === "extension_disconnected") {
+            sock.end();
+            reject(new Error(resp.message));
+            return;
+          }
           sock.end();
           resolve(resp);
         } catch {
@@ -1742,7 +1886,16 @@ socket.on("data", (data) => {
   for (const line of lines) {
     if (!line.trim()) continue;
     try {
-      handleResponse(JSON.parse(line)).catch((err) => {
+      const msg = JSON.parse(line);
+      
+      if (msg.type === "extension_disconnected") {
+        clearTimeout(timeout);
+        console.error(msg.message);
+        socket.end();
+        process.exit(1);
+      }
+      
+      handleResponse(msg).catch((err) => {
         console.error("Handler error:", err.message);
         process.exit(1);
       });
@@ -1814,15 +1967,11 @@ async function handleResponse(response) {
     const origHeight = data.height || 0;
     
     if (!skipResize && (origWidth > maxSize || origHeight > maxSize)) {
-      try {
-        const { execSync } = require("child_process");
-        execSync(`sips --resampleHeightWidthMax ${maxSize} "${saveTo}" --out "${saveTo}" 2>/dev/null`, { stdio: "pipe" });
-        const sizeInfo = execSync(`sips -g pixelWidth -g pixelHeight "${saveTo}" 2>/dev/null`, { encoding: "utf8" });
-        const newWidth = sizeInfo.match(/pixelWidth:\s*(\d+)/)?.[1] || "?";
-        const newHeight = sizeInfo.match(/pixelHeight:\s*(\d+)/)?.[1] || "?";
-        console.log(`Saved to ${saveTo} (${newWidth}x${newHeight}, resized from ${origWidth}x${origHeight})`);
-      } catch (e) {
-        console.log(`Saved to ${saveTo} (${origWidth}x${origHeight}, resize failed: ${e.message})`);
+      const result = resizeImage(saveTo, maxSize);
+      if (result.success) {
+        console.log(`Saved to ${saveTo} (${result.width}x${result.height}, resized from ${origWidth}x${origHeight})`);
+      } else {
+        console.log(`Saved to ${saveTo} (${origWidth}x${origHeight}, resize failed: ${result.error})`);
       }
     } else {
       console.log(`Saved to ${saveTo} (${origWidth}x${origHeight})`);
@@ -1832,8 +1981,16 @@ async function handleResponse(response) {
   } else if (tool === "tab.list") {
     const tabs = data?.tabs || data || [];
     if (Array.isArray(tabs)) {
-      for (const t of tabs) {
-        console.log(`${t.id}\t${t.title}\t${t.url}`);
+      if (tabs.length === 0) {
+        if (globalOpts.windowId) {
+          console.log(`No tabs in window ${globalOpts.windowId}. Window may not exist - use 'surf window.list' to verify.`);
+        } else {
+          console.log("No tabs found.");
+        }
+      } else {
+        for (const t of tabs) {
+          console.log(`${t.id}\t${t.title}\t${t.url}`);
+        }
       }
     } else {
       console.log(JSON.stringify(data, null, 2));
@@ -1963,6 +2120,26 @@ async function handleResponse(response) {
     meta.push(`${((data.tookMs || 0) / 1000).toFixed(1)}s`);
     console.error(`\n[${meta.join(' | ')}]`);
     if (data.url) console.error(`URL: ${data.url}`);
+  } else if (tool === "window.list" && data?.windows) {
+    if (data.windows.length === 0) {
+      console.log("No windows. Use 'surf window.new' to create one.");
+    } else {
+      for (const w of data.windows) {
+        const focused = w.focused ? " [focused]" : "";
+        const state = w.state !== "normal" ? ` (${w.state})` : "";
+        console.log(`${w.id}\t${w.tabCount} tabs\t${w.width}x${w.height}${focused}${state}`);
+        if (w.tabs) {
+          for (const t of w.tabs) {
+            const active = t.active ? "*" : " ";
+            console.log(`  ${active} ${t.id}\t${t.title || "(no title)"}\t${t.url || ""}`);
+          }
+        }
+      }
+      // Hint for agents
+      if (data.windows.length > 0 && !globalOpts.windowId) {
+        console.log("\n[hint] Use --window-id <id> to isolate commands to a specific window");
+      }
+    }
   } else if (typeof data === "string") {
     console.log(data);
   } else if (data?.success === true) {
