@@ -57,3 +57,17 @@ jobs:
 
       - name: TypeScript check
         run: npm run check
+
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "25"
+          cache: 'npm'
+
+      - name: Security audit
+        run: npm audit --audit-level=high
