@@ -1124,4 +1124,42 @@ describe("CDPController", () => {
       expect(pressCalls[2]?.[2].clickCount).toBe(3);
     });
   });
+
+  describe("type", () => {
+    let controller: CDPController;
+    const tabId = 3300;
+
+    beforeEach(() => {
+      controller = new CDPController();
+      mockChrome.debugger.attach.mockResolvedValue(undefined);
+      mockChrome.debugger.sendCommand.mockResolvedValue({});
+    });
+
+    it("types characters using key events", async () => {
+      await controller.type(tabId, "ab");
+
+      const keyCalls = mockChrome.debugger.sendCommand.mock.calls.filter(
+        (call) => call[1] === "Input.dispatchKeyEvent",
+      );
+
+      // Each character has keyDown + keyUp
+      expect(keyCalls.length).toBe(4);
+
+      const aDown = keyCalls.find((c) => c[2].key === "a" && c[2].type === "keyDown");
+      const bDown = keyCalls.find((c) => c[2].key === "b" && c[2].type === "keyDown");
+      expect(aDown).toBeDefined();
+      expect(bDown).toBeDefined();
+    });
+
+    it("handles newline as Enter key", async () => {
+      await controller.type(tabId, "a\nb");
+
+      const keyCalls = mockChrome.debugger.sendCommand.mock.calls.filter(
+        (call) => call[1] === "Input.dispatchKeyEvent",
+      );
+
+      const enterDown = keyCalls.find((c) => c[2].key === "Enter" && c[2].type === "keyDown");
+      expect(enterDown).toBeDefined();
+    });
+  });
 });
