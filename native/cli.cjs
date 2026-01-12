@@ -282,17 +282,70 @@ const TOOLS = {
       "page.read": { 
         desc: "Get accessibility tree + visible text", 
         args: [], 
-        opts: { all: "Include all elements", ref: "Get specific element", "no-text": "Exclude visible text content" },
+        opts: { 
+          all: "Include all elements", 
+          ref: "Get specific element", 
+          "no-text": "Exclude visible text content",
+          depth: "Maximum tree depth (default: unlimited)",
+          compact: "Remove empty structural elements",
+        },
         examples: [
           { cmd: "page.read", desc: "Interactive elements + text content" },
           { cmd: "page.read --all", desc: "All elements + text" },
           { cmd: "page.read --no-text", desc: "Interactive elements only (no text)" },
+          { cmd: "page.read --depth 3", desc: "Limit to 3 levels deep" },
+          { cmd: "page.read --compact", desc: "Skip empty containers" },
+          { cmd: "page.read --depth 3 --compact", desc: "Shallow + compact (60% smaller)" },
           { cmd: "read", desc: "Alias" },
         ]
       },
       "read": { desc: "Alias for page.read", args: [], alias: "page.read" },
       "page.text": { desc: "Extract all text from page", args: [] },
       "page.state": { desc: "Get page state (modals, loading, etc.)", args: [] },
+    }
+  },
+  locate: {
+    desc: "Semantic element location",
+    commands: {
+      "locate.role": {
+        desc: "Find element by ARIA role",
+        args: ["role"],
+        opts: { 
+          name: "Element name/text",
+          action: "Action to perform (click|fill|hover|text)",
+          value: "Value for fill action",
+          all: "Return all matches"
+        },
+        examples: [
+          { cmd: 'locate.role button --name "Submit" --action click', desc: "Click button by name" },
+          { cmd: 'locate.role textbox --name "Email" --action fill --value "test@test.com"', desc: "Fill input" },
+          { cmd: 'locate.role link --all', desc: "List all links with refs" },
+        ]
+      },
+      "locate.text": {
+        desc: "Find element by text content",
+        args: ["text"],
+        opts: {
+          exact: "Exact match",
+          action: "Action to perform",
+          value: "Value for fill action"
+        },
+        examples: [
+          { cmd: 'locate.text "Sign In" --action click', desc: "Click by text" },
+          { cmd: 'locate.text "Accept" --exact --action click', desc: "Exact text match" },
+        ]
+      },
+      "locate.label": {
+        desc: "Find form field by label",
+        args: ["label"],
+        opts: {
+          action: "Action to perform",
+          value: "Value for fill action"
+        },
+        examples: [
+          { cmd: 'locate.label "Username" --action fill --value "john"', desc: "Fill by label" },
+        ]
+      },
     }
   },
   wait: {
@@ -546,6 +599,35 @@ const TOOLS = {
       "emulate.network": { desc: "Emulate network conditions", args: ["preset"], opts: {} },
       "emulate.cpu": { desc: "CPU throttling (rate >= 1)", args: ["rate"], opts: {} },
       "emulate.geo": { desc: "Override geolocation", args: [], opts: { lat: "Latitude", lon: "Longitude", accuracy: "Accuracy in meters (default: 100)", clear: "Clear override" } },
+      "emulate.device": {
+        desc: "Emulate mobile device",
+        args: ["device"],
+        opts: { list: "List available devices" },
+        examples: [
+          { cmd: 'emulate.device "iPhone 14"', desc: "Emulate iPhone" },
+          { cmd: 'emulate.device "Pixel 7"', desc: "Emulate Pixel" },
+          { cmd: "emulate.device --list", desc: "Show all devices" },
+          { cmd: 'emulate.device "reset"', desc: "Return to desktop" },
+        ]
+      },
+      "emulate.viewport": {
+        desc: "Set custom viewport",
+        args: [],
+        opts: { width: "Viewport width", height: "Viewport height", scale: "Device scale factor", mobile: "Enable mobile mode" },
+        examples: [
+          { cmd: "emulate.viewport --width 375 --height 812", desc: "iPhone size" },
+          { cmd: "emulate.viewport --width 1920 --height 1080 --scale 2", desc: "Retina display" },
+        ]
+      },
+      "emulate.touch": {
+        desc: "Enable/disable touch emulation",
+        args: [],
+        opts: { enabled: "Enable touch (default: true)" },
+        examples: [
+          { cmd: "emulate.touch", desc: "Enable touch" },
+          { cmd: "emulate.touch --enabled false", desc: "Disable touch" },
+        ]
+      },
     }
   },
   form: {
@@ -576,8 +658,38 @@ const TOOLS = {
   frame: {
     desc: "Iframe handling",
     commands: {
-      "frame.list": { desc: "List all frames in page", args: [] },
-      "frame.js": { desc: "Execute JS in specific frame", args: [], opts: { id: "Frame ID from frame.list", code: "JavaScript code" } },
+      "frame.list": { 
+        desc: "List all frames in page", 
+        args: [],
+        examples: [{ cmd: "frame.list", desc: "Show frame tree" }]
+      },
+      "frame.switch": {
+        desc: "Switch to iframe context",
+        args: [],
+        opts: {
+          selector: "Frame CSS selector",
+          name: "Frame name attribute",
+          index: "Frame index (0-based)"
+        },
+        examples: [
+          { cmd: 'frame.switch --selector "#payment-iframe"', desc: "Switch by selector" },
+          { cmd: 'frame.switch --name "payment"', desc: "Switch by name" },
+          { cmd: "frame.switch --index 0", desc: "Switch to first frame" },
+        ]
+      },
+      "frame.main": {
+        desc: "Return to main frame",
+        args: [],
+        examples: [{ cmd: "frame.main", desc: "Exit iframe context" }]
+      },
+      "frame.js": { 
+        desc: "Execute JS in specific frame", 
+        args: ["code"], 
+        opts: { id: "Frame ID from frame.list", file: "Run JS from file" },
+        examples: [
+          { cmd: 'frame.js "return document.title" --id frame1', desc: "JS in specific frame" },
+        ]
+      },
     }
   },
   cookie: {
@@ -842,7 +954,7 @@ Scroll and capture:
     title: "Window Isolation",
     content: `Keep agent work separate from your browsing.
 
-Start a session:
+Create a dedicated window:
   surf window.new "https://example.com"
   # Returns: Window 123 (tab 456)
   # Use --window-id 123 to target this window
@@ -862,7 +974,88 @@ Manage windows:
 Tips:
   - Agent commands won't affect your active browser window
   - If window has no usable tabs, one is auto-created
-  - Use window.new --incognito for isolated cookies/sessions`
+  - Use window.new --incognito for isolated cookies`
+  },
+  semantic: {
+    title: "Semantic Locators",
+    content: `Find elements by role, text, or label instead of refs or selectors.
+
+By ARIA role:
+  locate.role button --name "Submit" --action click
+  locate.role textbox --name "Email" --action fill --value "test@test.com"
+  locate.role link --all                              # List all links
+
+By text content:
+  locate.text "Sign In" --action click
+  locate.text "Accept" --exact --action click         # Exact match
+
+By form label:
+  locate.label "Username" --action fill --value "john"
+  locate.label "Password" --action fill --value "secret"
+
+Available actions: click, fill, hover, text
+Without --action, returns the ref for later use.`
+  },
+  frames: {
+    title: "Iframe Navigation",
+    content: `Work with embedded iframes.
+
+List frames:
+  frame.list                    # Show frame tree with IDs
+
+Switch context:
+  frame.switch --selector "#payment-iframe"
+  frame.switch --name "checkout"
+  frame.switch --index 0        # First iframe
+
+Return to main:
+  frame.main
+
+Execute JS in frame:
+  frame.js "return document.title" --id frame1
+
+After frame.switch, subsequent commands target that frame context.`
+  },
+  devices: {
+    title: "Device Emulation",
+    content: `Test responsive designs and mobile views.
+
+Emulate a device:
+  emulate.device "iPhone 14"
+  emulate.device "Pixel 7"
+  emulate.device --list         # Show all devices
+  emulate.device "reset"        # Return to desktop
+
+Custom viewport:
+  emulate.viewport --width 375 --height 812
+  emulate.viewport --width 1920 --height 1080 --scale 2
+
+Touch events:
+  emulate.touch                 # Enable touch
+  emulate.touch --enabled false # Disable
+
+Popular devices: iPhone 14, iPhone SE, iPad, iPad Pro,
+Pixel 7, Galaxy S23, Nest Hub`
+  },
+  optimization: {
+    title: "Token Optimization",
+    content: `Reduce output size for LLM efficiency.
+
+Limit tree depth:
+  page.read --depth 3           # Max 3 levels deep
+
+Skip empty containers:
+  page.read --compact           # Remove empty structural elements
+
+Combine for best results:
+  page.read --depth 3 --compact # ~60% smaller output
+
+Filter to interactive only:
+  page.read                     # Default: interactive elements only
+  page.read --all               # Include all elements
+
+Exclude text content:
+  page.read --no-text           # Skip visible text section`
   },
 };
 
@@ -875,6 +1068,7 @@ const ALL_SOCKET_TOOLS = [
   "scroll", "scroll_to", "hover", "left_click_drag", "drag", "wait",
   "computer",
   "page.read", "page.text", "page.state",
+  "locate.role", "locate.text", "locate.label",
   "tab.list", "tab.new", "tab.switch", "tab.close", "tab.name", "tab.unname", "tab.named",
   "tab.group", "tab.ungroup", "tab.groups", "tab.reload",
   "scroll.top", "scroll.bottom", "scroll.to", "scroll.info",
@@ -884,11 +1078,11 @@ const ALL_SOCKET_TOOLS = [
   "network.get", "network.body", "network.curl", "network.origins", 
   "network.clear", "network.stats", "network.export", "network.path",
   "dialog.accept", "dialog.dismiss", "dialog.info",
-  "emulate.network", "emulate.cpu", "emulate.geo",
+  "emulate.network", "emulate.cpu", "emulate.geo", "emulate.device", "emulate.viewport", "emulate.touch",
   "form.fill",
   "perf.start", "perf.stop", "perf.metrics",
   "upload",
-  "frame.list", "frame.js",
+  "frame.list", "frame.switch", "frame.main", "frame.js",
   "cookie.list", "cookie.get", "cookie.set", "cookie.clear",
   "search", "batch",
   "zoom", "resize",
@@ -897,6 +1091,41 @@ const ALL_SOCKET_TOOLS = [
   "history.list", "history.search",
   "window.new", "window.list", "window.focus", "window.close", "window.resize",
 ];
+
+// See also suggestions for related commands
+const SEE_ALSO = {
+  "click": ["locate.role", "locate.text", "page.read"],
+  "type": ["locate.label", "form.fill", "smart_type"],
+  "page.read": ["--depth for smaller output", "--compact to skip empty containers", "page.text"],
+  "locate.role": ["locate.text", "locate.label", "click --selector"],
+  "locate.text": ["locate.role", "locate.label", "search"],
+  "locate.label": ["locate.role", "form.fill"],
+  "tab.list": ["window.list"],
+  "tab.new": ["window.new for isolation"],
+  "window.new": ["window.list"],
+  "window.list": ["tab.list"],
+  "frame.list": ["frame.switch", "frame.main"],
+  "frame.switch": ["frame.list", "frame.main", "frame.js"],
+  "frame.main": ["frame.list", "frame.switch"],
+  "frame.js": ["frame.switch", "js"],
+  "emulate.network": ["emulate.device", "emulate.cpu"],
+  "emulate.device": ["emulate.viewport", "emulate.touch"],
+  "emulate.viewport": ["emulate.device", "emulate.touch"],
+  "emulate.touch": ["emulate.device", "emulate.viewport"],
+  "emulate.cpu": ["emulate.network", "perf.metrics"],
+  "perf.start": ["perf.stop", "perf.metrics"],
+  "perf.stop": ["perf.start", "perf.metrics"],
+  "perf.metrics": ["perf.start", "console", "network"],
+  "navigate": ["wait.load", "page.read"],
+  "screenshot": ["page.read", "scroll.bottom for fullpage"],
+  "search": ["locate.text", "page.read"],
+  "wait.element": ["wait.load", "wait.network"],
+  "wait.load": ["wait.element", "wait.network"],
+  "wait.network": ["wait.load", "wait.element"],
+  "scroll.to": ["click", "page.read"],
+  "console": ["network", "perf.metrics"],
+  "network": ["console", "network.get"],
+};
 
 const showBasicHelp = () => {
   console.log(`surf v${VERSION} - Browser automation CLI
@@ -909,7 +1138,9 @@ Common Commands:
   type <text>        Type text at cursor or into element
   screenshot         Capture screenshot (alias: snap)
   page.read          Get page accessibility tree (alias: read)
+  locate.role <role> Find element by ARIA role
   search <term>      Search for text in page (alias: find)
+  window.new <url>   Create isolated browser window
   wait <seconds>     Wait N seconds
 
 Quick Examples:
@@ -917,11 +1148,14 @@ Quick Examples:
   surf read
   surf click e5
   surf type "hello" --submit
-  surf snap
+  surf locate.role button --name "Submit" --action click
+  surf read --depth 3 --compact
+  surf emulate.device "iPhone 14"
+  surf window.new "https://example.com" && surf --window-id 123 go "https://other.com"
 
 More Help:
   surf --help-full           All commands
-  surf --help-topic <topic>  Topic guide (refs, selectors, cookies, batch, screenshots, automation)
+  surf --help-topic <topic>  Topic guide (refs, semantic, frames, devices...)
   surf <command> --help      Command details
   surf --find <query>        Search for commands
   surf --about <topic>       Learn about a topic
@@ -1033,12 +1267,24 @@ const showToolHelp = (toolName) => {
         }
         console.log();
       }
+      // Show related commands
+      const related = SEE_ALSO[toolName];
+      if (related && related.length > 0) {
+        console.log(`See also: ${related.join(", ")}`);
+        console.log();
+      }
       return;
     }
   }
   if (ALL_SOCKET_TOOLS.includes(toolName)) {
     console.log(`\n  ${toolName}\n`);
     console.log("  Socket API tool. Use --json to see response format.\n");
+    // Show related commands for socket tools too
+    const related = SEE_ALSO[toolName];
+    if (related && related.length > 0) {
+      console.log(`See also: ${related.join(", ")}`);
+      console.log();
+    }
     return;
   }
   console.error(`Unknown command: ${toolName}`);
@@ -1553,6 +1799,11 @@ const PRIMARY_ARG_MAP = {
   "window.new": "url",
   "window.focus": "id",
   "window.close": "id",
+  "locate.role": "role",
+  "locate.text": "text",
+  "locate.label": "label",
+  "emulate.device": "device",
+  "frame.js": "code",
 };
 
 const toolArgs = { ...options };
@@ -2018,6 +2269,14 @@ async function handleResponse(response) {
     console.log(data.pageContent);
   } else if (tool === "page.text" && data?.text) {
     console.log(data.text);
+  } else if (tool === "emulate.device" && data?.devices) {
+    console.log("Available devices:\n");
+    const devices = data.devices;
+    for (const d of devices) {
+      console.log(`  ${d}`);
+    }
+    console.log("\nUsage: surf emulate.device \"<device name>\"");
+    console.log('Reset:  surf emulate.device "reset"');
   } else if (tool === "js") {
     if (data?.result !== undefined) {
       const val = data.result.value ?? data.result;

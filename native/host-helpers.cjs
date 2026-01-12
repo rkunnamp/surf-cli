@@ -695,6 +695,16 @@ function mapToolToMessage(tool, args, tabId) {
       return { type: "WAIT_FOR_LOAD", timeout: a.timeout || 30000, ...baseMsg };
     case "frame.list":
       return { type: "GET_FRAMES", ...baseMsg };
+    case "frame.switch":
+      return { 
+        type: "FRAME_SWITCH", 
+        selector: a.selector,
+        name: a.name,
+        index: a.index !== undefined ? parseInt(a.index, 10) : undefined,
+        ...baseMsg 
+      };
+    case "frame.main":
+      return { type: "FRAME_MAIN", ...baseMsg };
     case "frame.js":
       return { type: "EVALUATE_IN_FRAME", frameId: a.id, code: a.code, ...baseMsg };
     case "dialog.accept":
@@ -717,6 +727,23 @@ function mapToolToMessage(tool, args, tabId) {
         throw new Error("--lat and --lon required");
       }
       return { type: "EMULATE_GEO", latitude: parseFloat(a.lat), longitude: parseFloat(a.lon), accuracy: parseFloat(a.accuracy) || 100, ...baseMsg };
+    case "emulate.device":
+      if (a.list) {
+        return { type: "EMULATE_DEVICE_LIST" };
+      }
+      if (!a.device) throw new Error("device name required");
+      return { type: "EMULATE_DEVICE", device: a.device, ...baseMsg };
+    case "emulate.viewport":
+      return { 
+        type: "EMULATE_VIEWPORT", 
+        width: a.width ? parseInt(a.width, 10) : undefined,
+        height: a.height ? parseInt(a.height, 10) : undefined,
+        deviceScaleFactor: a.scale ? parseFloat(a.scale) : undefined,
+        mobile: a.mobile,
+        ...baseMsg 
+      };
+    case "emulate.touch":
+      return { type: "EMULATE_TOUCH", enabled: a.enabled !== false, ...baseMsg };
     case "form.fill":
       let fillData = a.data;
       if (typeof fillData === "string") {
@@ -733,11 +760,51 @@ function mapToolToMessage(tool, args, tabId) {
       const files = a.files ? (typeof a.files === "string" ? a.files.split(",").map(f => f.trim()) : a.files) : [];
       return { type: "UPLOAD_FILE", ref: a.ref, files, ...baseMsg };
     case "page.read":
-      return { type: "READ_PAGE", options: { filter: a.filter || "interactive", refId: a.ref, includeText: a["no-text"] !== true }, ...baseMsg };
+      return { 
+        type: "READ_PAGE", 
+        options: { 
+          filter: a.filter || "interactive", 
+          refId: a.ref, 
+          includeText: a["no-text"] !== true,
+          depth: a.depth !== undefined ? parseInt(a.depth, 10) : undefined,
+          compact: a.compact || false,
+        }, 
+        ...baseMsg 
+      };
     case "page.text":
       return { type: "GET_PAGE_TEXT", ...baseMsg };
     case "page.state":
       return { type: "PAGE_STATE", ...baseMsg };
+    case "locate.role":
+      if (!a.role) throw new Error("role argument required");
+      return { 
+        type: "LOCATE_ROLE", 
+        role: a.role,
+        name: a.name,
+        action: a.action,
+        value: a.value,
+        all: a.all || false,
+        ...baseMsg 
+      };
+    case "locate.text":
+      if (!a.text) throw new Error("text argument required");
+      return { 
+        type: "LOCATE_TEXT", 
+        text: a.text,
+        exact: a.exact || false,
+        action: a.action,
+        value: a.value,
+        ...baseMsg 
+      };
+    case "locate.label":
+      if (!a.label) throw new Error("label argument required");
+      return { 
+        type: "LOCATE_LABEL", 
+        label: a.label,
+        action: a.action,
+        value: a.value,
+        ...baseMsg 
+      };
     case "ai":
       return { type: "AI_ANALYZE", query: a.query, act: a.act, mode: a.mode, ...baseMsg };
     case "wait":

@@ -728,6 +728,88 @@ export class CDPController {
     }
   }
 
+  async emulateDevice(
+    tabId: number, 
+    device: { width: number; height: number; deviceScaleFactor: number; mobile: boolean; touch?: boolean; userAgent?: string }
+  ): Promise<{ success: boolean; error?: string }> {
+    await this.ensureAttached(tabId);
+    try {
+      // Set device metrics
+      await this.send(tabId, "Emulation.setDeviceMetricsOverride", {
+        width: device.width,
+        height: device.height,
+        deviceScaleFactor: device.deviceScaleFactor,
+        mobile: device.mobile,
+      });
+      
+      // Set user agent if provided
+      if (device.userAgent) {
+        await this.send(tabId, "Emulation.setUserAgentOverride", {
+          userAgent: device.userAgent,
+        });
+      }
+      
+      // Enable touch if specified
+      if (device.touch) {
+        await this.send(tabId, "Emulation.setTouchEmulationEnabled", {
+          enabled: true,
+          maxTouchPoints: 5,
+        });
+      }
+      
+      return { success: true };
+    } catch (e) {
+      return { success: false, error: e instanceof Error ? e.message : String(e) };
+    }
+  }
+
+  async clearDeviceEmulation(tabId: number): Promise<{ success: boolean; error?: string }> {
+    await this.ensureAttached(tabId);
+    try {
+      await this.send(tabId, "Emulation.clearDeviceMetricsOverride");
+      await this.send(tabId, "Emulation.setUserAgentOverride", { userAgent: "" });
+      await this.send(tabId, "Emulation.setTouchEmulationEnabled", { enabled: false });
+      return { success: true };
+    } catch (e) {
+      return { success: false, error: e instanceof Error ? e.message : String(e) };
+    }
+  }
+
+  async emulateViewport(
+    tabId: number, 
+    options: { width?: number; height?: number; deviceScaleFactor?: number; mobile?: boolean }
+  ): Promise<{ success: boolean; error?: string }> {
+    await this.ensureAttached(tabId);
+    try {
+      // Get current viewport size as defaults
+      const viewport = await this.getViewportSize(tabId);
+      
+      await this.send(tabId, "Emulation.setDeviceMetricsOverride", {
+        width: options.width || viewport.width,
+        height: options.height || viewport.height,
+        deviceScaleFactor: options.deviceScaleFactor || 1,
+        mobile: options.mobile || false,
+      });
+      
+      return { success: true };
+    } catch (e) {
+      return { success: false, error: e instanceof Error ? e.message : String(e) };
+    }
+  }
+
+  async emulateTouch(tabId: number, enabled: boolean): Promise<{ success: boolean; error?: string }> {
+    await this.ensureAttached(tabId);
+    try {
+      await this.send(tabId, "Emulation.setTouchEmulationEnabled", {
+        enabled,
+        maxTouchPoints: enabled ? 5 : 0,
+      });
+      return { success: true };
+    } catch (e) {
+      return { success: false, error: e instanceof Error ? e.message : String(e) };
+    }
+  }
+
   async startPerformanceTrace(tabId: number, categories?: string[]): Promise<{ success: boolean; error?: string }> {
     await this.ensureAttached(tabId);
     try {

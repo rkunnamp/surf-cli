@@ -379,7 +379,8 @@ function generateAccessibilityTree(
   filter: "all" | "interactive" = "interactive",
   maxDepth = 15,
   refId?: string,
-  forceFullSnapshot = false
+  forceFullSnapshot = false,
+  compact = false
 ): { 
   pageContent: string;
   diff?: string;
@@ -601,7 +602,7 @@ function generateAccessibilityTree(
       return style.cursor === "pointer";
     }
 
-    function shouldInclude(element: Element, options: { filter: string; refId: string | null }): boolean {
+    function shouldInclude(element: Element, options: { filter: string; refId: string | null; compact: boolean }): boolean {
       const tag = element.tagName.toLowerCase();
       if (["script", "style", "meta", "link", "title", "noscript"].includes(tag)) return false;
       if (options.filter !== "all" && element.getAttribute("aria-hidden") === "true") return false;
@@ -620,12 +621,21 @@ function generateAccessibilityTree(
       if (getName(element).length > 0) return true;
 
       const role = getRole(element);
+      
+      // In compact mode, skip empty structural elements
+      if (options.compact) {
+        const emptyStructuralRoles = new Set(["generic", "group", "region", "article", "section", "complementary"]);
+        if (emptyStructuralRoles.has(role) && getName(element).length === 0) {
+          return false;
+        }
+      }
+      
       return role !== "generic" && role !== "img";
     }
 
     function traverse(element: Element, depth: number): string[] {
       const lines: string[] = [];
-      const options = { filter, refId: refId || null };
+      const options = { filter, refId: refId || null, compact };
       const elementMap = getElementMap();
 
       const include = shouldInclude(element, options) || (refId && depth === 0);
@@ -1409,7 +1419,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           options.filter || "interactive",
           options.depth ?? 15,
           options.refId,
-          options.forceFullSnapshot ?? false
+          options.forceFullSnapshot ?? false,
+          options.compact ?? false
         );
         sendResponse(result);
       }
@@ -1468,6 +1479,247 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     case "GET_PAGE_TEXT": {
       const result = getPageText();
       sendResponse(result);
+      break;
+    }
+    case "GET_FRAME_BY_SELECTOR": {
+      try {
+        const iframe = document.querySelector(message.selector) as HTMLIFrameElement;
+        if (!iframe || iframe.tagName.toLowerCase() !== 'iframe') {
+          sendResponse({ error: `No iframe found with selector "${message.selector}"` });
+          break;
+        }
+        // Return what info we can - the service worker will match by URL or name
+        sendResponse({ 
+          url: iframe.src,
+          name: iframe.name || undefined,
+        });
+      } catch (err) {
+        sendResponse({ error: err instanceof Error ? err.message : String(err) });
+      }
+      break;
+    }
+    case "GET_FRAME_NAME": {
+      // Return this frame's name (for frame matching by name)
+      try {
+        sendResponse({ name: window.name || null });
+      } catch (err) {
+        sendResponse({ name: null });
+      }
+      break;
+    }
+    case "LOCATE_ROLE": {
+      try {
+        const { role, name, all } = message;
+        const elementMap = getElementMap();
+        
+        // Mapping of role to possible selectors
+        const implicitRoles: Record<string, string[]> = {
+          button: ['button', 'input[type="button"]', 'input[type="submit"]', 'input[type="reset"]', '[role="button"]'],
+          link: ['a[href]', '[role="link"]'],
+          textbox: ['input:not([type])', 'input[type="text"]', 'input[type="email"]', 'input[type="password"]', 'input[type="search"]', 'input[type="tel"]', 'input[type="url"]', 'textarea', '[role="textbox"]'],
+          checkbox: ['input[type="checkbox"]', '[role="checkbox"]'],
+          radio: ['input[type="radio"]', '[role="radio"]'],
+          combobox: ['select', '[role="combobox"]'],
+          listbox: ['[role="listbox"]', 'select[multiple]'],
+          option: ['option', '[role="option"]'],
+          heading: ['h1', 'h2', 'h3', 'h4', 'h5', 'h6', '[role="heading"]'],
+          navigation: ['nav', '[role="navigation"]'],
+          main: ['main', '[role="main"]'],
+          img: ['img[alt]', '[role="img"]'],
+          dialog: ['dialog', '[role="dialog"]', '[role="alertdialog"]'],
+          tab: ['[role="tab"]'],
+          tabpanel: ['[role="tabpanel"]'],
+          menu: ['[role="menu"]'],
+          menuitem: ['[role="menuitem"]'],
+        };
+        
+        // Build selectors for the role
+        const selectors = implicitRoles[role] || [`[role="${role}"]`];
+        const candidates: Element[] = [];
+        
+        for (const sel of selectors) {
+          try {
+            candidates.push(...document.querySelectorAll(sel));
+          } catch {}
+        }
+        
+        // Filter by visibility
+        const visible = candidates.filter(el => {
+          const style = window.getComputedStyle(el);
+          return style.display !== 'none' && 
+                 style.visibility !== 'hidden' && 
+                 (el as HTMLElement).offsetWidth > 0 &&
+                 (el as HTMLElement).offsetHeight > 0;
+        });
+        
+        // Filter by name if provided
+        let matches = visible;
+        if (name) {
+          const lowerName = name.toLowerCase();
+          matches = visible.filter(el => {
+            const ariaLabel = el.getAttribute('aria-label')?.toLowerCase();
+            const text = el.textContent?.trim().toLowerCase();
+            const title = el.getAttribute('title')?.toLowerCase();
+            const placeholder = (el as HTMLInputElement).placeholder?.toLowerCase();
+            const value = (el as HTMLInputElement).value?.toLowerCase();
+            
+            return ariaLabel?.includes(lowerName) || 
+                   text?.includes(lowerName) || 
+                   title?.includes(lowerName) ||
+                   placeholder?.includes(lowerName) ||
+                   value?.includes(lowerName);
+          });
+        }
+        
+        if (matches.length === 0) {
+          sendResponse({ error: `No element found with role "${role}"${name ? ` and name "${name}"` : ''}` });
+          break;
+        }
+        
+        // Generate refs for matches
+        const results = matches.map(el => {
+          const ref = getOrAssignRef(el, role, name || '');
+          window.__piRefs = window.__piRefs || {};
+          window.__piRefs[ref] = el;
+          elementMap[ref] = { element: new WeakRef(el), role, name: name || '' };
+          return { ref, text: el.textContent?.trim().slice(0, 50) };
+        });
+        
+        if (all) {
+          sendResponse({ matches: results });
+        } else {
+          sendResponse({ ref: results[0].ref, text: results[0].text });
+        }
+      } catch (err) {
+        sendResponse({ error: err instanceof Error ? err.message : String(err) });
+      }
+      break;
+    }
+    case "LOCATE_TEXT": {
+      try {
+        const { text, exact } = message;
+        const elementMap = getElementMap();
+        
+        // Find elements containing the text
+        const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+        const matches: Element[] = [];
+        
+        while (walker.nextNode()) {
+          const nodeText = walker.currentNode.textContent || '';
+          const hasMatch = exact 
+            ? nodeText.trim() === text 
+            : nodeText.toLowerCase().includes(text.toLowerCase());
+          
+          if (hasMatch) {
+            const parent = walker.currentNode.parentElement;
+            if (parent && !matches.includes(parent)) {
+              // Check visibility
+              const style = window.getComputedStyle(parent);
+              if (style.display !== 'none' && style.visibility !== 'hidden') {
+                matches.push(parent);
+              }
+            }
+          }
+        }
+        
+        if (matches.length === 0) {
+          sendResponse({ error: `No element found with text "${text}"` });
+          break;
+        }
+        
+        // Pick the most specific (smallest) element
+        const el = matches.sort((a, b) => 
+          (a.textContent?.length || 0) - (b.textContent?.length || 0)
+        )[0];
+        
+        const role = getResolvedRole(el);
+        const ref = getOrAssignRef(el, role, text);
+        window.__piRefs = window.__piRefs || {};
+        window.__piRefs[ref] = el;
+        elementMap[ref] = { element: new WeakRef(el), role, name: text };
+        
+        sendResponse({ ref, text: el.textContent?.trim().slice(0, 50) });
+      } catch (err) {
+        sendResponse({ error: err instanceof Error ? err.message : String(err) });
+      }
+      break;
+    }
+    case "LOCATE_LABEL": {
+      try {
+        const { label } = message;
+        const elementMap = getElementMap();
+        
+        // Find label element
+        const labels = document.querySelectorAll('label');
+        let input: Element | null = null;
+        
+        for (const lbl of labels) {
+          const lblText = lbl.textContent?.trim().toLowerCase();
+          if (lblText?.includes(label.toLowerCase())) {
+            // Check for 'for' attribute
+            const forId = lbl.getAttribute('for');
+            if (forId) {
+              input = document.getElementById(forId);
+            }
+            // Check for nested input
+            if (!input) {
+              input = lbl.querySelector('input, select, textarea');
+            }
+            if (input) break;
+          }
+        }
+        
+        // Also check aria-label and placeholder
+        if (!input) {
+          const lowerLabel = label.toLowerCase();
+          input = document.querySelector(
+            `input[aria-label*="${label}" i], input[placeholder*="${label}" i], ` +
+            `textarea[aria-label*="${label}" i], textarea[placeholder*="${label}" i], ` +
+            `select[aria-label*="${label}" i]`
+          );
+        }
+        
+        if (!input) {
+          sendResponse({ error: `No form field found with label "${label}"` });
+          break;
+        }
+        
+        const role = getResolvedRole(input);
+        const ref = getOrAssignRef(input, role, label);
+        window.__piRefs = window.__piRefs || {};
+        window.__piRefs[ref] = input;
+        elementMap[ref] = { element: new WeakRef(input), role, name: label };
+        
+        sendResponse({ ref, label });
+      } catch (err) {
+        sendResponse({ error: err instanceof Error ? err.message : String(err) });
+      }
+      break;
+    }
+    case "GET_ELEMENT_TEXT": {
+      try {
+        const { ref } = message;
+        const elementMap = getElementMap();
+        const elemRef = elementMap[ref];
+        
+        let element: Element | undefined;
+        if (elemRef) {
+          element = elemRef.element.deref();
+          if (!element) delete elementMap[ref];
+        }
+        if (!element && window.__piRefs) {
+          element = window.__piRefs[ref];
+        }
+        
+        if (!element) {
+          sendResponse({ error: `Element ${ref} not found` });
+          break;
+        }
+        
+        sendResponse({ text: element.textContent?.trim() || '' });
+      } catch (err) {
+        sendResponse({ error: err instanceof Error ? err.message : String(err) });
+      }
       break;
     }
     case "SCROLL_TO_ELEMENT": {

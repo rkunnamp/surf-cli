@@ -110,11 +110,51 @@ surf tab.reload --hard
 ```bash
 surf read                           # Accessibility tree + visible text content
 surf read --no-text                 # Accessibility tree only (no text)
+surf read --depth 3                 # Limit tree depth (smaller output)
+surf read --compact                 # Remove empty structural elements
+surf read --depth 3 --compact       # Both (60% smaller output)
 surf page.text                      # Raw text content only
 surf page.state                     # Modals, loading state, scroll position
 ```
 
 Element refs (`e1`, `e2`, `e3`...) are stable identifiers from the accessibility tree - semantic, predictable, and resilient to DOM changes.
+
+### Semantic Locators
+
+Find and interact with elements by role, text, or label - no refs or selectors needed:
+
+```bash
+# By ARIA role
+surf locate.role button --name "Submit"           # Find button
+surf locate.role button --name "Submit" --action click  # Find and click
+surf locate.role textbox --action fill --value "hello"  # Find and fill
+surf locate.role link --all                       # List all links
+
+# By text content  
+surf locate.text "Sign In" --action click         # Click element with text
+surf locate.text "Accept" --exact                 # Exact match only
+
+# By form label
+surf locate.label "Email" --action fill --value "test@example.com"
+```
+
+### Iframe Support
+
+Work with content inside iframes:
+
+```bash
+surf frame.list                     # List all frames
+surf frame.switch --index 0         # Switch to first iframe
+surf frame.switch --name "payment"  # Switch by frame name
+surf frame.switch --selector "#checkout-frame"  # Switch by CSS selector
+
+# Now all commands target the iframe
+surf read                           # Read iframe content
+surf click e5                       # Click in iframe
+surf locate.role button --action click
+
+surf frame.main                     # Return to main page
+```
 
 ### Interaction
 
@@ -173,6 +213,37 @@ surf window.list                    # List all windows
 surf window.list --tabs             # Include tab details
 surf window.focus 123456            # Bring window to front
 surf window.close 123456            # Close window
+```
+
+### Device Emulation
+
+Test responsive designs and mobile layouts:
+
+```bash
+surf emulate.device --list                    # Show available devices
+surf emulate.device "iPhone 14"               # Emulate iPhone 14
+surf emulate.device "Pixel 7"                 # Emulate Pixel 7
+surf emulate.device reset                     # Return to desktop
+
+# Custom viewport
+surf emulate.viewport --width 375 --height 812
+surf emulate.viewport --width 1920 --height 1080 --scale 2
+
+# Touch emulation
+surf emulate.touch                            # Enable touch
+surf emulate.touch --enabled false            # Disable touch
+```
+
+Available devices: iPhone 12-14 (Pro/Max), iPhone SE, iPad (Pro/Mini), Pixel 5-7 (Pro), Galaxy S21-S23, Galaxy Tab S7, Nest Hub (Max).
+
+### Performance Tracing
+
+Capture performance metrics and traces:
+
+```bash
+surf perf.metrics                   # Current performance metrics
+surf perf.start                     # Start tracing
+surf perf.stop                      # Stop and get trace data
 ```
 
 ### AI Queries (No API Keys)
@@ -284,12 +355,15 @@ echo '{"type":"tool_request","method":"execute_tool","params":{"tool":"tab.list"
 | `tab.*` | `list`, `new`, `switch`, `close`, `name`, `unname`, `named`, `group`, `ungroup`, `groups`, `reload` |
 | `scroll.*` | `top`, `bottom`, `to`, `info` |
 | `page.*` | `read`, `text`, `state` |
+| `locate.*` | `role`, `text`, `label` |
+| `frame.*` | `list`, `switch`, `main`, `js` |
 | `wait.*` | `element`, `network`, `url`, `dom`, `load` |
 | `cookie.*` | `list`, `get`, `set`, `clear` |
 | `bookmark.*` | `add`, `remove`, `list` |
 | `history.*` | `list`, `search` |
 | `dialog.*` | `accept`, `dismiss`, `info` |
-| `emulate.*` | `network`, `cpu`, `geo` |
+| `emulate.*` | `network`, `cpu`, `geo`, `device`, `viewport`, `touch` |
+| `perf.*` | `start`, `stop`, `metrics` |
 | `network.*` | `get`, `body`, `curl`, `origins`, `clear`, `stats`, `export`, `path` |
 
 ## Aliases

@@ -7,6 +7,15 @@ debugLog("Service worker loaded");
 const cdp = new CDPController();
 const activeStreamTabs = new Map<number, number>();
 
+// Frame context per tab - stores the active frameId for each tab
+// When frame.switch is called, subsequent content script messages go to that frame
+const frameContexts = new Map<number, number>();
+
+// Helper to get the frame ID for content script messaging
+function getFrameIdForTab(tabId: number): number {
+  return frameContexts.get(tabId) ?? 0;
+}
+
 const screenshotCache = new Map<string, { base64: string; width: number; height: number }>();
 let screenshotCounter = 0;
 
@@ -181,6 +190,8 @@ const tabNameRegistry = new Map<string, number>();
 
 chrome.webNavigation.onCompleted.addListener((details) => {
   if (details.frameId === 0) {
+    // Clear frame context on main frame navigation (iframes may have changed)
+    frameContexts.delete(details.tabId);
     const resolver = navigationResolvers.get(details.tabId);
     if (resolver) {
       resolver();
@@ -203,6 +214,7 @@ chrome.webNavigation.onErrorOccurred.addListener((details) => {
 
 chrome.tabs.onRemoved.addListener((tabId) => {
   cdp.detach(tabId);
+  frameContexts.delete(tabId);
   for (const [name, id] of tabNameRegistry) {
     if (id === tabId) {
       tabNameRegistry.delete(name);
@@ -241,6 +253,54 @@ async function waitForRuntimeReady(tabId: number, timeoutMs = 10000): Promise<vo
   
   // Timeout but proceed anyway - the page might still work
   console.warn(`waitForRuntimeReady timed out for tab ${tabId}`);
+}
+
+// Helper for locate.* commands with actions
+async function performLocateAction(
+  tabId: number, 
+  ref: string, 
+  action: string, 
+  value: string | undefined,
+  cdp: CDPController,
+  frameId: number = 0
+): Promise<any> {
+  switch (action) {
+    case "click": {
+      const result = await chrome.tabs.sendMessage(tabId, {
+        type: "CLICK_ELEMENT",
+        ref,
+        button: "left",
+      }, { frameId });
+      return result.error ? result : { success: true, action: "click", ref };
+    }
+    case "fill": {
+      if (!value) return { error: "fill action requires --value" };
+      const result = await chrome.tabs.sendMessage(tabId, {
+        type: "FORM_INPUT",
+        ref,
+        value,
+      }, { frameId });
+      return result.error ? result : { success: true, action: "fill", ref, value };
+    }
+    case "hover": {
+      const coords = await chrome.tabs.sendMessage(tabId, {
+        type: "GET_ELEMENT_COORDINATES",
+        ref,
+      }, { frameId });
+      if (coords.error) return coords;
+      await cdp.hover(tabId, coords.x, coords.y);
+      return { success: true, action: "hover", ref };
+    }
+    case "text": {
+      const textResult = await chrome.tabs.sendMessage(tabId, {
+        type: "GET_ELEMENT_TEXT",
+        ref,
+      }, { frameId });
+      return textResult;
+    }
+    default:
+      return { error: `Unknown action: ${action}. Use click|fill|hover|text` };
+  }
 }
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
@@ -392,10 +452,11 @@ export async function handleMessage(
     case "CLICK_TYPE": {
       if (!tabId) throw new Error("No tabId provided");
       if (!message.text) throw new Error("No text provided");
+      const clickTypeFrameId = getFrameIdForTab(tabId);
       let clicked = false;
       if (message.ref) {
         try {
-          const result = await chrome.tabs.sendMessage(tabId, { type: "CLICK_ELEMENT", ref: message.ref, button: "left" }, { frameId: 0 });
+          const result = await chrome.tabs.sendMessage(tabId, { type: "CLICK_ELEMENT", ref: message.ref, button: "left" }, { frameId: clickTypeFrameId });
           if (!result.error) clicked = true;
         } catch {}
       }
@@ -423,10 +484,11 @@ export async function handleMessage(
     case "CLICK_TYPE_SUBMIT": {
       if (!tabId) throw new Error("No tabId provided");
       if (!message.text) throw new Error("No text provided");
+      const clickTypeSubmitFrameId = getFrameIdForTab(tabId);
       let clicked = false;
       if (message.ref) {
         try {
-          const result = await chrome.tabs.sendMessage(tabId, { type: "CLICK_ELEMENT", ref: message.ref, button: "left" }, { frameId: 0 });
+          const result = await chrome.tabs.sendMessage(tabId, { type: "CLICK_ELEMENT", ref: message.ref, button: "left" }, { frameId: clickTypeSubmitFrameId });
           if (!result.error) clicked = true;
         } catch {}
       }
@@ -489,10 +551,11 @@ export async function handleMessage(
     case "AUTOCOMPLETE_SELECT": {
       if (!tabId) throw new Error("No tabId provided");
       if (!message.text) throw new Error("No text provided");
+      const autocompleteFrameId = getFrameIdForTab(tabId);
       let clicked = false;
       if (message.ref) {
         try {
-          const result = await chrome.tabs.sendMessage(tabId, { type: "CLICK_ELEMENT", ref: message.ref, button: "left" }, { frameId: 0 });
+          const result = await chrome.tabs.sendMessage(tabId, { type: "CLICK_ELEMENT", ref: message.ref, button: "left" }, { frameId: autocompleteFrameId });
           if (!result.error) clicked = true;
         } catch {}
       }
@@ -733,6 +796,7 @@ export async function handleMessage(
 
     case "READ_PAGE": {
       if (!tabId) throw new Error("No tabId provided");
+      const readFrameId = getFrameIdForTab(tabId);
       try {
         await chrome.tabs.sendMessage(tabId, { type: "HIDE_FOR_TOOL_USE" }, { frameId: 0 });
       } catch (e) {}
@@ -743,7 +807,7 @@ export async function handleMessage(
         result = await chrome.tabs.sendMessage(tabId, {
           type: "GENERATE_ACCESSIBILITY_TREE",
           options: message.options || {},
-        }, { frameId: 0 });
+        }, { frameId: readFrameId });
       } catch (err) {
         return { 
           error: "Content script not loaded. Try refreshing the page.",
@@ -759,7 +823,7 @@ export async function handleMessage(
       // Include visible text content if requested
       if (message.options?.includeText) {
         try {
-          const textResult = await chrome.tabs.sendMessage(tabId, { type: "GET_PAGE_TEXT" }, { frameId: 0 });
+          const textResult = await chrome.tabs.sendMessage(tabId, { type: "GET_PAGE_TEXT" }, { frameId: readFrameId });
           if (textResult?.text) {
             result.text = textResult.text;
           }
@@ -785,7 +849,7 @@ export async function handleMessage(
         return await chrome.tabs.sendMessage(tabId, {
           type: "GET_ELEMENT_COORDINATES",
           ref: message.ref,
-        }, { frameId: 0 });
+        }, { frameId: getFrameIdForTab(tabId) });
       } catch (err) {
         return { error: "Content script not loaded. Try refreshing the page." };
       }
@@ -798,7 +862,7 @@ export async function handleMessage(
           type: "FORM_INPUT",
           ref: message.ref,
           value: message.value,
-        }, { frameId: 0 });
+        }, { frameId: getFrameIdForTab(tabId) });
       } catch (err) {
         return { error: "Content script not loaded. Try refreshing the page." };
       }
@@ -811,7 +875,7 @@ export async function handleMessage(
         return await chrome.tabs.sendMessage(tabId, {
           type: "EVAL_IN_PAGE",
           code: message.code,
-        }, { frameId: 0 });
+        }, { frameId: getFrameIdForTab(tabId) });
       } catch (err) {
         return { error: "Content script not loaded. Try refreshing the page." };
       }
@@ -823,7 +887,7 @@ export async function handleMessage(
         return await chrome.tabs.sendMessage(tabId, {
           type: "SCROLL_TO_ELEMENT",
           ref: message.ref,
-        }, { frameId: 0 });
+        }, { frameId: getFrameIdForTab(tabId) });
       } catch (err) {
         return { error: "Content script not loaded. Try refreshing the page." };
       }
@@ -928,7 +992,82 @@ export async function handleMessage(
     case "GET_PAGE_TEXT": {
       if (!tabId) throw new Error("No tabId provided");
       try {
-        return await chrome.tabs.sendMessage(tabId, { type: "GET_PAGE_TEXT" }, { frameId: 0 });
+        return await chrome.tabs.sendMessage(tabId, { type: "GET_PAGE_TEXT" }, { frameId: getFrameIdForTab(tabId) });
+      } catch (err) {
+        return { error: "Content script not loaded. Try refreshing the page." };
+      }
+    }
+
+    case "LOCATE_ROLE": {
+      if (!tabId) throw new Error("No tabId provided");
+      if (!message.role) throw new Error("role required");
+      const locateFrameId = getFrameIdForTab(tabId);
+      
+      try {
+        const result = await chrome.tabs.sendMessage(tabId, {
+          type: "LOCATE_ROLE",
+          role: message.role,
+          name: message.name,
+          all: message.all,
+        }, { frameId: locateFrameId });
+        
+        if (result.error) return result;
+        
+        // Perform action if specified
+        if (message.action && result.ref) {
+          return await performLocateAction(tabId, result.ref, message.action, message.value, cdp, locateFrameId);
+        }
+        
+        return result;
+      } catch (err) {
+        return { error: "Content script not loaded. Try refreshing the page." };
+      }
+    }
+
+    case "LOCATE_TEXT": {
+      if (!tabId) throw new Error("No tabId provided");
+      if (!message.text) throw new Error("text required");
+      const textFrameId = getFrameIdForTab(tabId);
+      
+      try {
+        const result = await chrome.tabs.sendMessage(tabId, {
+          type: "LOCATE_TEXT",
+          text: message.text,
+          exact: message.exact,
+        }, { frameId: textFrameId });
+        
+        if (result.error) return result;
+        
+        // Perform action if specified
+        if (message.action && result.ref) {
+          return await performLocateAction(tabId, result.ref, message.action, message.value, cdp, textFrameId);
+        }
+        
+        return result;
+      } catch (err) {
+        return { error: "Content script not loaded. Try refreshing the page." };
+      }
+    }
+
+    case "LOCATE_LABEL": {
+      if (!tabId) throw new Error("No tabId provided");
+      if (!message.label) throw new Error("label required");
+      const labelFrameId = getFrameIdForTab(tabId);
+      
+      try {
+        const result = await chrome.tabs.sendMessage(tabId, {
+          type: "LOCATE_LABEL",
+          label: message.label,
+        }, { frameId: labelFrameId });
+        
+        if (result.error) return result;
+        
+        // Perform action if specified
+        if (message.action && result.ref) {
+          return await performLocateAction(tabId, result.ref, message.action, message.value, cdp, labelFrameId);
+        }
+        
+        return result;
       } catch (err) {
         return { error: "Content script not loaded. Try refreshing the page." };
       }
@@ -977,7 +1116,7 @@ export async function handleMessage(
           type: "CLICK_ELEMENT",
           ref: message.ref,
           button: message.button || "left",
-        }, { frameId: 0 });
+        }, { frameId: getFrameIdForTab(tabId) });
         if (result.error) return { error: result.error };
         return { success: true };
       } catch (err) {
@@ -991,7 +1130,7 @@ export async function handleMessage(
         const coords = await chrome.tabs.sendMessage(tabId, {
           type: "GET_ELEMENT_COORDINATES",
           ref: message.ref,
-        }, { frameId: 0 });
+        }, { frameId: getFrameIdForTab(tabId) });
         if (coords.error) return { error: coords.error };
         await cdp.hover(tabId, coords.x, coords.y);
         return { success: true };
@@ -1145,6 +1284,7 @@ export async function handleMessage(
     case "WAIT_FOR_ELEMENT": {
       if (!tabId) throw new Error("No tabId provided");
       if (!message.selector) throw new Error("No selector provided");
+      const waitFrameId = getFrameIdForTab(tabId);
       
       try {
         await chrome.tabs.sendMessage(tabId, { type: "HIDE_FOR_TOOL_USE" }, { frameId: 0 });
@@ -1157,7 +1297,7 @@ export async function handleMessage(
           selector: message.selector,
           state: message.state || "visible",
           timeout: message.timeout || 20000,
-        }, { frameId: 0 });
+        }, { frameId: waitFrameId });
         return result;
       } catch (err) {
         return { 
@@ -1313,13 +1453,119 @@ export async function handleMessage(
       return { success: true, latitude: message.latitude, longitude: message.longitude };
     }
 
+    case "EMULATE_DEVICE_LIST": {
+      // Return list of available devices - handled in CLI
+      const devices = [
+        "iPhone 12", "iPhone 13", "iPhone 14", "iPhone 14 Pro", "iPhone 14 Pro Max", "iPhone SE",
+        "iPad", "iPad Pro", "iPad Mini",
+        "Pixel 5", "Pixel 6", "Pixel 7", "Pixel 7 Pro",
+        "Galaxy S21", "Galaxy S22", "Galaxy S23", "Galaxy Tab S7",
+        "Nest Hub", "Nest Hub Max"
+      ];
+      return { devices };
+    }
+
+    case "EMULATE_DEVICE": {
+      if (!tabId) throw new Error("No tabId provided");
+      const deviceName = message.device;
+      
+      // Handle reset
+      if (deviceName.toLowerCase() === "reset") {
+        const result = await cdp.clearDeviceEmulation(tabId);
+        if (!result.success) throw new Error(result.error);
+        return { success: true, message: "Device emulation reset" };
+      }
+      
+      // Device presets (synced with device-presets.cjs)
+      const presets: Record<string, { width: number; height: number; deviceScaleFactor: number; mobile: boolean; touch: boolean; userAgent: string }> = {
+        // Apple devices
+        "iPhone 12": { width: 390, height: 844, deviceScaleFactor: 3, mobile: true, touch: true, userAgent: "Mozilla/5.0 (iPhone; CPU iPhone OS 14_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.0 Mobile/15E148 Safari/604.1" },
+        "iPhone 13": { width: 390, height: 844, deviceScaleFactor: 3, mobile: true, touch: true, userAgent: "Mozilla/5.0 (iPhone; CPU iPhone OS 15_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/15.0 Mobile/15E148 Safari/604.1" },
+        "iPhone 14": { width: 390, height: 844, deviceScaleFactor: 3, mobile: true, touch: true, userAgent: "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Mobile/15E148 Safari/604.1" },
+        "iPhone 14 Pro": { width: 393, height: 852, deviceScaleFactor: 3, mobile: true, touch: true, userAgent: "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Mobile/15E148 Safari/604.1" },
+        "iPhone 14 Pro Max": { width: 430, height: 932, deviceScaleFactor: 3, mobile: true, touch: true, userAgent: "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Mobile/15E148 Safari/604.1" },
+        "iPhone SE": { width: 375, height: 667, deviceScaleFactor: 2, mobile: true, touch: true, userAgent: "Mozilla/5.0 (iPhone; CPU iPhone OS 15_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/15.0 Mobile/15E148 Safari/604.1" },
+        "iPad": { width: 768, height: 1024, deviceScaleFactor: 2, mobile: true, touch: true, userAgent: "Mozilla/5.0 (iPad; CPU OS 14_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.0 Mobile/15E148 Safari/604.1" },
+        "iPad Pro": { width: 1024, height: 1366, deviceScaleFactor: 2, mobile: true, touch: true, userAgent: "Mozilla/5.0 (iPad; CPU OS 14_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.0 Mobile/15E148 Safari/604.1" },
+        "iPad Mini": { width: 768, height: 1024, deviceScaleFactor: 2, mobile: true, touch: true, userAgent: "Mozilla/5.0 (iPad; CPU OS 14_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.0 Mobile/15E148 Safari/604.1" },
+        // Google devices
+        "Pixel 5": { width: 393, height: 851, deviceScaleFactor: 2.75, mobile: true, touch: true, userAgent: "Mozilla/5.0 (Linux; Android 11; Pixel 5) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/90.0.4430.91 Mobile Safari/537.36" },
+        "Pixel 6": { width: 412, height: 915, deviceScaleFactor: 2.625, mobile: true, touch: true, userAgent: "Mozilla/5.0 (Linux; Android 12; Pixel 6) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/96.0.4664.45 Mobile Safari/537.36" },
+        "Pixel 7": { width: 412, height: 915, deviceScaleFactor: 2.625, mobile: true, touch: true, userAgent: "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Mobile Safari/537.36" },
+        "Pixel 7 Pro": { width: 412, height: 892, deviceScaleFactor: 3.5, mobile: true, touch: true, userAgent: "Mozilla/5.0 (Linux; Android 13; Pixel 7 Pro) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Mobile Safari/537.36" },
+        // Samsung devices
+        "Galaxy S21": { width: 360, height: 800, deviceScaleFactor: 3, mobile: true, touch: true, userAgent: "Mozilla/5.0 (Linux; Android 11; SM-G991B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/90.0.4430.210 Mobile Safari/537.36" },
+        "Galaxy S22": { width: 360, height: 780, deviceScaleFactor: 3, mobile: true, touch: true, userAgent: "Mozilla/5.0 (Linux; Android 12; SM-S901B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/100.0.4896.127 Mobile Safari/537.36" },
+        "Galaxy S23": { width: 360, height: 780, deviceScaleFactor: 3, mobile: true, touch: true, userAgent: "Mozilla/5.0 (Linux; Android 13; SM-S911B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/110.0.0.0 Mobile Safari/537.36" },
+        "Galaxy Tab S7": { width: 800, height: 1280, deviceScaleFactor: 2, mobile: true, touch: true, userAgent: "Mozilla/5.0 (Linux; Android 10; SM-T870) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/90.0.4430.91 Safari/537.36" },
+        // Other
+        "Nest Hub": { width: 1024, height: 600, deviceScaleFactor: 2, mobile: false, touch: true, userAgent: "Mozilla/5.0 (Linux; Android) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/88.0.4324.109 Safari/537.36 CrKey/1.54.248666" },
+        "Nest Hub Max": { width: 1280, height: 800, deviceScaleFactor: 2, mobile: false, touch: true, userAgent: "Mozilla/5.0 (Linux; Android) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/88.0.4324.109 Safari/537.36 CrKey/1.54.248666" },
+      };
+      
+      // Find matching device (case-insensitive partial match, prefer longest match)
+      type DevicePreset = { width: number; height: number; deviceScaleFactor: number; mobile: boolean; touch: boolean; userAgent: string };
+      let device: DevicePreset | undefined = presets[deviceName];
+      if (!device) {
+        const lowerName = deviceName.toLowerCase();
+        let bestMatch: { name: string; preset: DevicePreset } | null = null;
+        
+        for (const [name, preset] of Object.entries(presets)) {
+          const presetLower = name.toLowerCase();
+          const presetNoSpaces = presetLower.replace(/\s+/g, "");
+          
+          // Check if it's a match
+          if (presetLower.includes(lowerName) || lowerName.includes(presetNoSpaces)) {
+            // Prefer longer matches (more specific devices)
+            if (!bestMatch || name.length > bestMatch.name.length) {
+              bestMatch = { name, preset };
+            }
+          }
+        }
+        
+        if (bestMatch) {
+          device = bestMatch.preset;
+        }
+      }
+      
+      if (!device) {
+        throw new Error(`Unknown device: ${deviceName}. Use --list to see available devices.`);
+      }
+      
+      const result = await cdp.emulateDevice(tabId, device);
+      if (!result.success) throw new Error(result.error);
+      return { success: true, device: deviceName };
+    }
+
+    case "EMULATE_VIEWPORT": {
+      if (!tabId) throw new Error("No tabId provided");
+      if (!message.width && !message.height) {
+        throw new Error("--width or --height required");
+      }
+      const result = await cdp.emulateViewport(tabId, {
+        width: message.width,
+        height: message.height,
+        deviceScaleFactor: message.deviceScaleFactor,
+        mobile: message.mobile,
+      });
+      if (!result.success) throw new Error(result.error);
+      return { success: true, width: message.width, height: message.height };
+    }
+
+    case "EMULATE_TOUCH": {
+      if (!tabId) throw new Error("No tabId provided");
+      const result = await cdp.emulateTouch(tabId, message.enabled);
+      if (!result.success) throw new Error(result.error);
+      return { success: true, enabled: message.enabled };
+    }
+
     case "FORM_FILL": {
       if (!tabId) throw new Error("No tabId provided");
       if (!message.data) throw new Error("No data provided");
       const response = await chrome.tabs.sendMessage(tabId, {
         type: "FORM_FILL",
         data: message.data,
-      }, { frameId: 0 });
+      }, { frameId: getFrameIdForTab(tabId) });
       return response;
     }
 
@@ -1351,7 +1597,7 @@ export async function handleMessage(
       const selectorResult = await chrome.tabs.sendMessage(tabId, {
         type: "GET_FILE_INPUT_SELECTOR",
         ref: message.ref,
-      }, { frameId: 0 });
+      }, { frameId: getFrameIdForTab(tabId) });
       if (selectorResult.error) throw new Error(selectorResult.error);
       const setResult = await cdp.setFileInputBySelector(tabId, selectorResult.selector, message.files);
       if (!setResult.success) throw new Error(setResult.error);
@@ -1370,6 +1616,99 @@ export async function handleMessage(
       const result = await cdp.getFrames(tabId);
       if (!result.success) throw new Error(result.error);
       return { success: true, frames: result.frames };
+    }
+
+    case "FRAME_SWITCH": {
+      if (!tabId) throw new Error("No tabId provided");
+      const { selector, name, index } = message;
+      
+      if (!selector && !name && index === undefined) {
+        throw new Error("--selector, --name, or --index required");
+      }
+      
+      // Get all frames using Chrome's webNavigation API (gives us correct frameIds for messaging)
+      const chromeFrames = await chrome.webNavigation.getAllFrames({ tabId });
+      if (!chromeFrames || chromeFrames.length === 0) {
+        throw new Error("No frames found in tab");
+      }
+      
+      // Filter to child frames only (frameId !== 0)
+      const childFrames = chromeFrames.filter(f => f.frameId !== 0);
+      
+      if (childFrames.length === 0) {
+        throw new Error("No iframes found on this page");
+      }
+      
+      let targetFrame: chrome.webNavigation.GetAllFrameResultDetails | null = null;
+      
+      if (index !== undefined) {
+        if (index < 0 || index >= childFrames.length) {
+          throw new Error(`Frame index ${index} out of range. Found ${childFrames.length} frame(s).`);
+        }
+        targetFrame = childFrames[index];
+      } else if (name) {
+        // Try to find frame by name using content script in each frame
+        for (const frame of childFrames) {
+          try {
+            const result = await chrome.tabs.sendMessage(tabId, {
+              type: "GET_FRAME_NAME",
+            }, { frameId: frame.frameId });
+            if (result?.name === name) {
+              targetFrame = frame;
+              break;
+            }
+          } catch {
+            // Frame may not have content script loaded
+          }
+        }
+        if (!targetFrame) {
+          throw new Error(`Frame with name "${name}" not found`);
+        }
+      } else if (selector) {
+        // Find frame by selector - ask main frame for iframe element's info
+        try {
+          const selectorResult = await chrome.tabs.sendMessage(tabId, {
+            type: "GET_FRAME_BY_SELECTOR",
+            selector,
+          }, { frameId: 0 });
+          
+          if (selectorResult?.error) throw new Error(selectorResult.error);
+          
+          // Match by URL since that's what we can reliably get
+          if (selectorResult?.url) {
+            targetFrame = childFrames.find(f => f.url === selectorResult.url) || null;
+          }
+          
+          // If no URL match and only one child frame, use it
+          if (!targetFrame && childFrames.length === 1) {
+            targetFrame = childFrames[0];
+          }
+        } catch (e) {
+          throw new Error(`Could not find frame with selector "${selector}"`);
+        }
+      }
+      
+      if (!targetFrame) {
+        throw new Error("Frame not found");
+      }
+      
+      // Store the Chrome extension frameId (integer) for this tab
+      frameContexts.set(tabId, targetFrame.frameId);
+      
+      return { 
+        success: true, 
+        frameId: targetFrame.frameId,
+        url: targetFrame.url,
+      };
+    }
+
+    case "FRAME_MAIN": {
+      if (!tabId) throw new Error("No tabId provided");
+      
+      // Clear frame context - go back to main frame (frameId 0)
+      frameContexts.delete(tabId);
+      
+      return { success: true, message: "Returned to main frame" };
     }
 
     case "EVALUATE_IN_FRAME": {
@@ -1712,7 +2051,7 @@ export async function handleMessage(
           ref: message.ref,
           coordinate: message.coordinate,
           filename: message.filename || "screenshot.png",
-        }, { frameId: 0 });
+        }, { frameId: getFrameIdForTab(tabId) });
 
         return result;
       } catch (err) {
@@ -1950,7 +2289,7 @@ export async function handleMessage(
           term: message.term,
           caseSensitive: message.caseSensitive || false,
           limit: message.limit || 10,
-        }, { frameId: 0 });
+        }, { frameId: getFrameIdForTab(tabId) });
         return result;
       } catch {
         return { error: "Content script not loaded. Try refreshing the page." };
@@ -2489,7 +2828,8 @@ const COMMANDS_WITHOUT_TAB = new Set([
   "CHATGPT_NEW_TAB", "CHATGPT_CLOSE_TAB", "CHATGPT_EVALUATE", "CHATGPT_CDP_COMMAND",
   "GET_CHATGPT_COOKIES", "GET_GOOGLE_COOKIES",
   "PERPLEXITY_NEW_TAB", "PERPLEXITY_CLOSE_TAB", "PERPLEXITY_EVALUATE", "PERPLEXITY_CDP_COMMAND",
-  "WINDOW_NEW", "WINDOW_LIST", "WINDOW_FOCUS", "WINDOW_CLOSE", "WINDOW_RESIZE"
+  "WINDOW_NEW", "WINDOW_LIST", "WINDOW_FOCUS", "WINDOW_CLOSE", "WINDOW_RESIZE",
+  "EMULATE_DEVICE_LIST"
 ]);
 
 initNativeMessaging(async (msg) => {

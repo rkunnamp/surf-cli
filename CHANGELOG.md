@@ -3,6 +3,11 @@
 ## [Unreleased]
 
 ### Added
+- **Frame context for iframe support** - `frame.switch` now properly affects subsequent commands (`page.read`, `locate.*`, `click`, `search`, etc.). Switch to an iframe and all content script operations target that frame.
+- **Semantic locators** - `locate.role`, `locate.text`, `locate.label` commands to find elements by ARIA role, text content, or label. Supports `--action click|fill|hover|text` to act on found elements.
+- **Device emulation** - `emulate.device` with 19 device presets (iPhone, iPad, Pixel, Galaxy, Nest Hub). Includes `emulate.viewport`, `emulate.touch` for custom configurations.
+- **Performance tracing** - `perf.start`, `perf.stop`, `perf.metrics` for capturing Chrome performance traces.
+- **Page read optimization** - `--depth` and `--compact` flags for `page.read` to reduce output size for LLM efficiency.
 - **Window isolation for multi-agent workflows** - New `window.*` commands (`new`, `list`, `focus`, `close`, `resize`) and `--window-id` global option. Agents can work in separate browser windows without interfering with user browsing.
 - **Helpful hints in CLI output** - Commands now show actionable hints (e.g., `window.new` shows how to use `--window-id`)
 - **Auto-tab creation** - When targeting a window with only restricted tabs (chrome://, extensions), Surf auto-creates a usable tab
@@ -21,6 +26,15 @@
 - `tab.new` now respects `--window-id` to create tabs in a specific window
 
 ### Fixed
+- Fixed `locate.role`, `locate.text`, `locate.label`, `emulate.device`, `frame.js` not accepting positional arguments (missing from PRIMARY_ARG_MAP)
+- Fixed `emulate.device --list` requiring a tab when it shouldn't (added to COMMANDS_WITHOUT_TAB)
+- Fixed frame context not being used by most content script operations (now `frame.switch` properly affects `page.read`, `locate.*`, `click`, `type`, `search`, etc.)
+- Fixed frame context memory leak on tab close
+- Fixed frame context not clearing on page navigation
+- Fixed device emulation matching preferring shorter names ("iPhone 14" over "iPhone 14 Pro" when user typed "iphone14pro")
+- Fixed `--depth` not being parsed as integer for `page.read`
+- Fixed device presets out of sync between CLI and extension (now 19 devices in both)
+- Fixed `performLocateAction` helper not respecting frame context for `--action` operations
 - Fixed internal message `id` leaking into JSON output for window commands
 - Fixed `windowId` not being forwarded from CLI through native host to extension
 - Fixed `tab.new` not creating tabs in the specified window when using `--window-id`
@@ -31,4 +45,5 @@
 - Fixed text content not being included when screenshots were also present in page read responses
 
 ### Removed
+- Removed `session.*` commands - sessions couldn't actually provide profile isolation via native messaging (use `window.new --incognito` for cookie isolation instead)
 - Removed non-functional base64 image output from CLI (was not being interpreted by agents)
