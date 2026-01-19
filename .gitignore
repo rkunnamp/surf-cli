@@ -8,3 +8,4 @@ dist/
 # Test coverage
 coverage/
 .playwright-mcp/
+FEATURE_COMPARISON.md

@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [2.2.0] - 2025-01-19
 
 ### Added
 - **Element styles inspection** - New `element.styles` command to get computed CSS styles from elements. Returns font, color, background, border, padding, and bounding box. Accepts refs or CSS selectors.
