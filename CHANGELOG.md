@@ -1,5 +1,21 @@
 # Changelog
 
+## [2.4.0] - 2026-01-22
+
+### Added
+- **Workflow execution** - New `surf do` command to execute multi-step browser workflows as a single operation. Reduces token overhead and improves reliability for common automation sequences.
+  - Inline workflows: `surf do 'go "https://example.com"\nclick e5\nscreenshot'`
+  - File-based workflows: `surf do --file workflow.json`
+  - Dry run validation: `surf do '...' --dry-run`
+  - Smart auto-waits after navigation, clicks, and form submissions
+  - Configurable error handling: `--on-error stop|continue`
+  - Adjustable step delay: `--step-delay 200` (or `0` to disable)
+  - JSON output: `--json` for structured results
+  - Tab/window targeting: `--tab-id`, `--window-id`
+- **Workflow parser** - Newline-separated command syntax with comment support (`#` lines), quote-aware tokenization, and automatic alias resolution.
+- **Workflow executor** - Sequential execution with streaming progress output, command-specific auto-waits (wait.load for navigation, wait.dom for clicks), and variable substitution support (`%{varname}` syntax for Phase 2).
+- **Workflow unit tests** - 42 new tests covering parser tokenization, command parsing, and executor auto-wait logic.
+
 ## [2.3.1] - 2026-01-20
 
 ### Changed

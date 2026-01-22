@@ -373,6 +373,55 @@ surf network.stats                    # Capture statistics
 Storage location: `/tmp/surf/` (override with `--network-path` or `SURF_NETWORK_PATH` env).
 Auto-cleanup: 24 hours TTL, 200MB max.
 
+### Workflows
+
+Execute multi-step browser automation as a single command:
+
+```bash
+# Inline workflow (newline-separated commands)
+surf do 'go "https://example.com/login"
+type "user@example.com" --selector "input[name=email]"
+type "password123" --selector "input[name=password]"
+click --selector "button[type=submit]"
+screenshot --output /tmp/after-login.png'
+
+# From JSON file (same format as --script)
+surf do --file login-workflow.json
+
+# Validate without executing
+surf do 'go "url"\nclick e5\nscreenshot' --dry-run
+```
+
+**Why workflows?** Instead of 6-8 separate CLI calls with LLM orchestration between each step, a workflow executes deterministically with smart auto-waits. Faster, cheaper, and more reliable.
+
+**Options:**
+- `--file`, `-f` - Load workflow from JSON file
+- `--dry-run` - Parse and validate without executing
+- `--on-error stop|continue` - Error handling (default: stop)
+- `--step-delay <ms>` - Delay between steps (default: 100, use 0 to disable)
+- `--no-auto-wait` - Disable automatic waits between steps
+- `--json` - Output structured JSON result
+
+**Auto-waits:** Commands that trigger page changes automatically wait for completion:
+- Navigation (`go`, `back`, `forward`) → waits for page load
+- Clicks, key presses, form fills → waits for DOM stability
+- Tab switches → waits for tab to load
+
+**JSON file format:**
+```json
+{
+  "name": "Login Flow",
+  "steps": [
+    { "tool": "navigate", "args": { "url": "https://example.com/login" } },
+    { "tool": "type", "args": { "text": "user@example.com", "selector": "input[name=email]" } },
+    { "tool": "click", "args": { "selector": "button[type=submit]" } },
+    { "tool": "screenshot", "args": {} }
+  ]
+}
+```
+
+**Supported commands:** All surf commands work in workflows. Use aliases (`go`, `snap`, `read`) or full names (`navigate`, `screenshot`, `page.read`).
+
 ## Global Options
 
 ```bash
@@ -393,10 +442,50 @@ For programmatic integration, send JSON to `/tmp/surf.sock`:
 echo '{"type":"tool_request","method":"execute_tool","params":{"tool":"tab.list","args":{}},"id":"1"}' | nc -U /tmp/surf.sock
 ```
 
+### Protocol Reference
+
+**Request:**
+```json
+{
+  "type": "tool_request",
+  "method": "execute_tool",
+  "params": {
+    "tool": "click",
+    "args": { "ref": "e5" }
+  },
+  "id": "unique-request-id",
+  "tabId": 123,
+  "windowId": 456
+}
+```
+
+**Success Response:**
+```json
+{
+  "type": "tool_response",
+  "id": "unique-request-id",
+  "result": {
+    "content": [{ "type": "text", "text": "Result message" }]
+  }
+}
+```
+
+**Error Response:**
+```json
+{
+  "type": "tool_response",
+  "id": "unique-request-id",
+  "error": {
+    "content": [{ "type": "text", "text": "Error message" }]
+  }
+}
+```
+
 ## Command Groups
 
 | Group | Commands |
 |-------|----------|
+| `workflow` | `do` |
 | `window.*` | `new`, `list`, `focus`, `close`, `resize` |
 | `tab.*` | `list`, `new`, `switch`, `close`, `name`, `unname`, `named`, `group`, `ungroup`, `groups`, `reload` |
 | `scroll.*` | `top`, `bottom`, `to`, `info` |
@@ -456,6 +545,20 @@ surf install <extension-id> --browser chromium
 - Use Chromium (no official Chrome for Linux ARM64)
 - Screenshot resize uses ImageMagick instead of macOS `sips`
 - Headless servers need Xvfb + VNC for initial login setup
+
+## AI Agent Integration
+
+Surf includes a skill file for AI coding agents like [Pi](https://github.com/badlogic/pi-mono):
+
+```bash
+# Symlink for auto-updates
+ln -s "$(pwd)/skills/surf" ~/.pi/agent/skills/surf
+
+# Or copy
+cp -r skills/surf ~/.pi/agent/skills/
+```
+
+See [`skills/README.md`](skills/README.md) for details.
 
 ## Development
 

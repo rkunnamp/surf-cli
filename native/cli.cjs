@@ -5,6 +5,8 @@ const { execSync } = require("child_process");
 const { loadConfig, getConfigPath, createStarterConfig } = require("./config.cjs");
 const networkFormatters = require("./formatters/network.cjs");
 const networkStore = require("./network-store.cjs");
+const { parseDoCommands } = require("./do-parser.cjs");
+const { executeDoSteps } = require("./do-executor.cjs");
 
 const SOCKET_PATH = "/tmp/surf.sock";
 
@@ -797,6 +799,27 @@ const TOOLS = {
         examples: [
           { cmd: 'batch --actions \'[{"type":"click","ref":"e1"},{"type":"wait","ms":500}]\'', desc: "Inline actions" },
           { cmd: "batch --file workflow.json", desc: "From file" },
+        ]
+      },
+    }
+  },
+  workflow: {
+    desc: "Workflow execution",
+    commands: {
+      "do": {
+        desc: "Execute multiple commands as a single workflow",
+        args: ["commands"],
+        opts: {
+          file: "Load workflow from JSON file",
+          "on-error": "stop (default) | continue",
+          "no-auto-wait": "Disable automatic waits between steps",
+          "step-delay": "Delay between steps in ms (default: 100)",
+          "dry-run": "Parse and validate without executing"
+        },
+        examples: [
+          { cmd: 'do \'go "https://example.com"\\nclick e5\\nscreenshot\'', desc: "Inline workflow" },
+          { cmd: 'do -f login.json', desc: "From JSON file" },
+          { cmd: 'do \'go "url"\\nclick e5\' --dry-run', desc: "Validate without running" },
         ]
       },
     }
@@ -1725,7 +1748,139 @@ if (args.includes("--script")) {
   return;
 }
 
-const BOOLEAN_FLAGS = ["auto-capture", "json", "stream", "dry-run", "stop-on-error", "fail-fast", "clear", "submit", "all", "case-sensitive", "hard", "annotate", "fullpage", "reset", "no-screenshot", "full", "soft-fail", "has-body", "exclude-static", "v", "vv", "request", "by-tab", "har", "jsonl", "no-save"];
+// Handle `surf do` workflow command
+// Must be parsed before general parseArgs since it uses its own arg handling
+if (args[0] === "do") {
+  const doArgs = args.slice(1);
+  let commandsInput = null;
+  let fileInput = null;
+  let dryRun = false;
+  let onError = "stop";
+  let noAutoWait = false;
+  let stepDelay = 100;
+  let wantJson = false;
+  let tabId = undefined;
+  let windowId = undefined;
+  
+  // Parse do-specific arguments
+  for (let i = 0; i < doArgs.length; i++) {
+    const arg = doArgs[i];
+    if (arg === "--file" || arg === "-f") {
+      fileInput = doArgs[i + 1];
+      i++;
+    } else if (arg === "--dry-run") {
+      dryRun = true;
+    } else if (arg === "--on-error") {
+      onError = doArgs[i + 1] || "stop";
+      i++;
+    } else if (arg === "--no-auto-wait") {
+      noAutoWait = true;
+    } else if (arg === "--step-delay") {
+      const parsed = parseInt(doArgs[i + 1], 10);
+      stepDelay = isNaN(parsed) ? 100 : parsed;
+      i++;
+    } else if (arg === "--json") {
+      wantJson = true;
+    } else if (arg === "--tab-id") {
+      tabId = parseInt(doArgs[i + 1], 10);
+      i++;
+    } else if (arg === "--window-id") {
+      windowId = parseInt(doArgs[i + 1], 10);
+      i++;
+    } else if (!arg.startsWith("-")) {
+      commandsInput = arg;
+    }
+  }
+  
+  if (!commandsInput && !fileInput) {
+    console.error("Error: commands string or --file required");
+    console.error('Usage: surf do \'go "url"\\nclick e5\'');
+    console.error("       surf do --file workflow.json");
+    process.exit(1);
+  }
+  
+  let steps;
+  try {
+    if (fileInput) {
+      if (!fs.existsSync(fileInput)) {
+        console.error(`Error: File not found: ${fileInput}`);
+        process.exit(1);
+      }
+      const content = fs.readFileSync(fileInput, "utf8");
+      // JSON file format (same as --script)
+      const script = JSON.parse(content);
+      if (!script.steps || !Array.isArray(script.steps)) {
+        throw new Error("JSON must have a 'steps' array");
+      }
+      // Convert --script format { tool, args } to do format { cmd, args }
+      steps = script.steps.map(s => ({ cmd: s.tool, args: s.args || {} }));
+    } else {
+      // Inline string parsing
+      steps = parseDoCommands(commandsInput);
+    }
+  } catch (e) {
+    console.error(`Error: Failed to parse workflow: ${e.message}`);
+    process.exit(1);
+  }
+  
+  if (steps.length === 0) {
+    console.error("Error: No commands found in workflow");
+    process.exit(1);
+  }
+  
+  // Validate with --dry-run
+  if (dryRun) {
+    console.log(`Would execute ${steps.length} steps:`);
+    steps.forEach((s, i) => {
+      const argStr = Object.entries(s.args || {})
+        .map(([k, v]) => `${k}=${JSON.stringify(v)}`)
+        .join(" ");
+      console.log(`  ${i + 1}. ${s.cmd} ${argStr}`);
+    });
+    process.exit(0);
+  }
+  
+  if (!wantJson) {
+    console.log(`Running workflow (${steps.length} steps)...\n`);
+  }
+  
+  const runWorkflow = async () => {
+    const result = await executeDoSteps(steps, {
+      onError,
+      autoWait: !noAutoWait,
+      stepDelay,
+      quiet: wantJson,
+      context: {
+        tabId,
+        windowId,
+      },
+    });
+    
+    // Print summary
+    if (wantJson) {
+      console.log(JSON.stringify(result, null, 2));
+      process.exit(result.status === "completed" ? 0 : 1);
+    }
+    
+    console.log("");
+    if (result.status === "completed") {
+      console.log(`Completed: ${result.completedSteps}/${result.totalSteps} steps (${result.totalMs}ms)`);
+      process.exit(0);
+    } else if (result.status === "partial") {
+      console.log(`Partial: ${result.completedSteps}/${result.totalSteps} steps completed, ${result.failed} failed`);
+      process.exit(1);
+    } else {
+      console.error(`Failed: ${result.completedSteps}/${result.totalSteps} steps completed`);
+      if (result.error) console.error(`Error: ${result.error}`);
+      process.exit(1);
+    }
+  };
+  
+  runWorkflow();
+  return;
+}
+
+const BOOLEAN_FLAGS = ["auto-capture", "json", "stream", "dry-run", "stop-on-error", "fail-fast", "clear", "submit", "all", "case-sensitive", "hard", "annotate", "fullpage", "reset", "no-screenshot", "full", "soft-fail", "has-body", "exclude-static", "v", "vv", "request", "by-tab", "har", "jsonl", "no-save", "no-auto-wait"];
 
 const AUTO_SCREENSHOT_TOOLS = ["click", "type", "key", "smart_type", "form.fill", "form_input", "drag", "hover", "scroll", "scroll.top", "scroll.bottom", "scroll.to", "dialog.accept", "dialog.dismiss", "js", "eval"];
 
@@ -1755,8 +1910,12 @@ const parseArgs = (rawArgs) => {
       result.options.v = true;
     } else if (arg === "-vv") {
       result.options.vv = true;
+    } else if (arg === "-f" && rawArgs[i + 1] && !rawArgs[i + 1].startsWith("-")) {
+      // -f takes a file path argument (for surf do -f <file>)
+      result.options.file = rawArgs[i + 1];
+      i++;
     } else if (arg.startsWith("-") && arg.length === 2) {
-      // Short flag like -n, -f
+      // Short flag like -n
       result.options[arg.slice(1)] = true;
     } else {
       result.positional.push(arg);
