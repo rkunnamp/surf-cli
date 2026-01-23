@@ -1,5 +1,15 @@
 # Changelog
 
+## [2.4.2] - 2026-01-23
+
+### Fixed
+- **Grok response detection** - Fixed timeout issues where Grok responses were visible in the browser but not detected by the CLI. Improved completion detection by:
+  - Using DOM-based response extraction (articles, conversation containers) instead of relying on body text parsing
+  - Tracking response text stability rather than noisy full-page body text
+  - Recognizing "Thought for Xs" as a definitive completion signal for thinking models
+  - Fixing false positive "isThinking" detection that matched "Grok 4.1 Thinking" model name
+- **Grok thinking model support** - Long-running thinking queries (1+ minutes) now reliably return complete responses
+
 ## [2.4.1] - 2026-01-22
 
 ### Changed

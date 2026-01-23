@@ -460,28 +460,76 @@ function extractGrokResponse(bodyText, userPrompt = '') {
 }
 
 async function waitForResponse(cdp, timeoutMs = 300000, userPrompt = '') {
-  // Grok 4.1 Thinking can take a LONG time (47+ seconds in screenshot)
-  // Default to 5 minutes for thinking models
+  // Grok can take a long time:
+  // - Thinking models (Grok 4.1 Thinking): 40-60+ seconds to think, then streams
+  // - Fast/Auto models: No thinking phase, just streams directly
   
   const deadline = Date.now() + timeoutMs;
   let previousText = '';
-  let stableCycles = 0;
-  const requiredStableCycles = 4; // 4 cycles at 300ms = 1.2s stable
+  let previousLength = 0;
   let lastChangeAt = Date.now();
-  const minStableMs = 1500; // 1.5 seconds stable
   let thinkingTime = null;
-  
-  // Capture initial page state to detect new content
-  const initialSnapshot = await evaluate(cdp, `document.body.innerText.length`);
-  const initialLength = initialSnapshot || 0;
+  let thinkingComplete = false;
+  let lastResponseText = '';
+  let responseStableCycles = 0;
   
   while (Date.now() < deadline) {
-    // Simple approach: get full body text and parse in Node.js
-    const snapshot = await evaluate(cdp, `({
-      bodyText: document.body.innerText || '',
-      hasStopBtn: !!document.querySelector('button[aria-label*="Stop"], button[aria-label*="stop"]'),
-      url: location.href
-    })`);
+    // Get page state with multiple completion indicators
+    const snapshot = await evaluate(cdp, `(function() {
+      const bodyText = document.body.innerText || '';
+      
+      // Check for stop/cancel button (indicates still generating)
+      const hasStopBtn = !!document.querySelector('button[aria-label*="Stop"], button[aria-label*="stop"], button[aria-label*="Cancel"]');
+      
+      // Check for "Thought for Xs" which indicates thinking model completed thinking
+      const thinkMatch = bodyText.match(/Thought for (\\d+)s/i);
+      const thinkingDone = !!thinkMatch;
+      const thinkingSecs = thinkMatch ? parseInt(thinkMatch[1], 10) : null;
+      
+      // Check if actively showing "thinking..." or similar loading state
+      const isThinking = /\\bthinking\\.\\.\\./i.test(bodyText) || 
+                         /\\bSearching\\.\\.\\./i.test(bodyText) ||
+                         bodyText.includes('Grok is thinking') ||
+                         bodyText.includes('is thinking...');
+      
+      // Try to find the actual Grok response in the DOM
+      // Look for the main content area - Grok responses appear in the conversation area
+      let responseText = '';
+      
+      // Strategy 1: Look for article elements or main content containers
+      const articles = document.querySelectorAll('article');
+      if (articles.length > 0) {
+        // Get the last article which should be the response
+        const lastArticle = articles[articles.length - 1];
+        responseText = lastArticle.innerText || '';
+      }
+      
+      // Strategy 2: If no articles, look for the conversation container
+      if (!responseText) {
+        const convArea = document.querySelector('[data-testid="conversation"], [role="main"] > div > div');
+        if (convArea) {
+          responseText = convArea.innerText || '';
+        }
+      }
+      
+      // Strategy 3: Fallback to looking for text after common Grok UI patterns
+      if (!responseText || responseText.length < 10) {
+        // Find content between user question and follow-up suggestions
+        const mainArea = document.querySelector('main') || document.body;
+        responseText = mainArea.innerText || bodyText;
+      }
+      
+      return {
+        bodyText: bodyText,
+        responseText: responseText,
+        bodyLength: bodyText.length,
+        hasStopBtn: hasStopBtn,
+        thinkingDone: thinkingDone,
+        thinkingSecs: thinkingSecs,
+        isThinking: isThinking,
+        url: location.href
+      };
+    })()`);
     
     if (!snapshot || !snapshot.bodyText) {
       await delay(300);
@@ -489,62 +537,82 @@ async function waitForResponse(cdp, timeoutMs = 300000, userPrompt = '') {
     }
     
     const bodyText = snapshot.bodyText;
+    const bodyLength = snapshot.bodyLength;
     
-    // Parse thinking time from body text
-    const thinkMatch = bodyText.match(/Thought for (\d+)s/i);
-    if (thinkMatch) {
-      const t = parseInt(thinkMatch[1], 10);
-      if (!thinkingTime || t > thinkingTime) thinkingTime = t;
+    // Track thinking time (for thinking models)
+    if (snapshot.thinkingSecs) {
+      if (!thinkingTime || snapshot.thinkingSecs > thinkingTime) {
+        thinkingTime = snapshot.thinkingSecs;
+      }
     }
     
-    // Check if still actively thinking
-    const isThinking = /\bthinking\.{0,3}$/im.test(bodyText);
+    // Detect when thinking completes (thinking models only)
+    // "Thought for Xs" is a DEFINITIVE signal that thinking AND response generation is done
+    if (snapshot.thinkingDone && !thinkingComplete) {
+      thinkingComplete = true;
+      // Give a brief moment for final render, then we're done
+      await delay(500);
+    }
     
-    // Check for completion indicators in body text
-    // Grok shows follow-up suggestions when done
-    const hasFollowUps = /Explain|Tell me more|Learn more/i.test(bodyText);
+    // Extract the actual response text - try DOM-extracted first, fall back to body parsing
+    let currentResponseText = '';
+    if (snapshot.responseText && snapshot.responseText.length > 10) {
+      currentResponseText = extractGrokResponse(snapshot.responseText, userPrompt) || '';
+    }
+    if (!currentResponseText || currentResponseText.length < 5) {
+      currentResponseText = extractGrokResponse(bodyText, userPrompt) || '';
+    }
     
-    // Track body text changes for stability
-    if (bodyText.length !== previousText.length) {
-      previousText = bodyText;
-      stableCycles = 0;
+    // Track RESPONSE text stability (more reliable than body text)
+    if (currentResponseText !== lastResponseText) {
+      lastResponseText = currentResponseText;
+      responseStableCycles = 0;
       lastChangeAt = Date.now();
-    } else {
-      stableCycles++;
+    } else if (currentResponseText.length > 0) {
+      responseStableCycles++;
+    }
+    
+    // Track body text for timeout fallback
+    if (bodyLength !== previousLength) {
+      previousText = bodyText;
+      previousLength = bodyLength;
     }
     
     const stableMs = Date.now() - lastChangeAt;
-    const isStable = stableCycles >= requiredStableCycles && stableMs >= minStableMs;
+    const noStopButton = !snapshot.hasStopBtn;
+    
+    // Response is stable if the extracted response text hasn't changed
+    // Use shorter thresholds since we're checking actual content, not noisy body text
+    // 4 cycles (1.2s) + 1.5s minimum is enough for response stability
+    const responseIsStable = responseStableCycles >= 4 && stableMs >= 1500 && currentResponseText.length > 10;
+    
+    // "Thought for Xs" is the strongest completion signal - response is definitely done
+    const thinkingModelDone = snapshot.thinkingDone && noStopButton;
+    
+    // SIMPLE CHECK: If we have response content, no stop button, and stable for 3+ cycles
+    const hasResponseNoStop = currentResponseText.length > 5 && noStopButton && responseStableCycles >= 3;
     
     // Response is complete when:
-    // 1. Not generating (no stop button)
-    // 2. Not actively thinking
-    // 3. Has follow-up suggestions OR body text is stable
-    // 4. Body is longer than initial (new content appeared)
-    const isDone = !snapshot.hasStopBtn && !isThinking && 
-                   (hasFollowUps || isStable) &&
-                   bodyText.length > initialLength;
+    // 1. Has meaningful response content (> 5 chars)
+    // 2. No stop button
+    // 3. Either: thinking done, response stable for 3+ cycles, OR stable for 4+ cycles with 1.5s
+    const isDone = currentResponseText.length > 5 && noStopButton &&
+                   (thinkingModelDone || hasResponseNoStop || responseIsStable);
     
     if (isDone) {
-      // Extract the response from the body text
-      // The response is typically between the user's question and the follow-up suggestions
-      const responseText = extractGrokResponse(bodyText, userPrompt);
-      
-      if (responseText) {
-        return {
-          text: responseText,
-          thinkingTime: thinkingTime,
-          url: snapshot.url,
-        };
-      }
+      return {
+        text: currentResponseText,
+        thinkingTime: thinkingTime,
+        url: snapshot.url,
+      };
     }
     
     await delay(300);
   }
   
-  // Timeout - return whatever we have
+  // Timeout - return whatever we have (partial response is better than nothing)
   const finalText = extractGrokResponse(previousText, userPrompt);
-  if (finalText) {
+  if (finalText && finalText.length > 10) {
     return {
       text: finalText,
       thinkingTime: thinkingTime,
