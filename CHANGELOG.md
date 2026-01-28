@@ -1,5 +1,16 @@
 # Changelog
 
+## [2.5.1] - 2026-01-28
+
+### Fixed
+- **Gemini client hanging** - Fixed HTTP requests hanging indefinitely when called through native messaging host. Root cause was missing `content-length` header - Node.js failed to auto-calculate content length in the native messaging stdio context, causing the server to wait for more data that never came.
+- **Gemini SSL/TLS** - Added `rejectUnauthorized: false` for Gemini API requests (matches Python library behavior)
+- **Gemini host header** - Added explicit `host: gemini.google.com` header required by Google's servers
+
+### Improved
+- **HTTP request robustness** - Added explicit timeouts, better error handling, and debug logging throughout the Gemini client
+- **Buffer handling** - Proper UTF-8 encoding for POST request bodies
+
 ## [2.5.0] - 2026-01-23
 
 ### Added

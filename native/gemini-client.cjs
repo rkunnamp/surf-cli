@@ -91,15 +91,12 @@ function hasRequiredCookies(cookieMap) {
   return REQUIRED_COOKIES.every(name => Boolean(cookieMap[name]));
 }
 
-function delay(ms) {
-  return new Promise(resolve => setTimeout(resolve, ms));
-}
-
 // ============================================================================
 // HTTP Helpers
 // ============================================================================
 
-function httpsGet(url, headers, binary = false) {
+function httpsGet(url, headers, opts = {}) {
+  const { binary = false, timeoutMs = 30000, log = null, label = "httpsGet" } = opts;
   return new Promise((resolve, reject) => {
     const urlObj = new URL(url);
     const options = {
@@ -111,9 +108,12 @@ function httpsGet(url, headers, binary = false) {
         "user-agent": USER_AGENT,
         ...headers,
       },
+      rejectUnauthorized: false, // Required for Gemini API
+      timeout: timeoutMs,
     };
 
     const req = https.request(options, (res) => {
+      if (log) log(`${label}: response ${res.statusCode} ${urlObj.hostname}${urlObj.pathname}`);
       const chunks = [];
       res.on("data", chunk => chunks.push(chunk));
       res.on("end", () => {
@@ -125,16 +125,33 @@ function httpsGet(url, headers, binary = false) {
           buffer: binary ? buffer : null,
         });
       });
+      res.on("error", (err) => {
+        if (log) log(`${label}: response error ${err.message}`);
+        reject(err);
+      });
     });
 
-    req.on("error", reject);
+    req.on("timeout", () => {
+      req.destroy(new Error(`${label}: request timeout after ${timeoutMs}ms`));
+    });
+    req.on("error", (err) => {
+      if (log) log(`${label}: request error ${err.message}`);
+      reject(err);
+    });
     req.end();
   });
 }
 
-function httpsPost(url, headers, body) {
+function httpsPost(url, headers, body, opts = {}) {
+  const { timeoutMs = 30000, log = null, label = "httpsPost" } = opts;
   return new Promise((resolve, reject) => {
     const urlObj = new URL(url);
+    const bodyBuffer = body == null
+      ? null
+      : Buffer.isBuffer(body)
+        ? body
+        : Buffer.from(String(body), "utf-8");
+    const hasLength = Object.keys(headers || {}).some((key) => key.toLowerCase() === "content-length");
     const options = {
       hostname: urlObj.hostname,
       port: 443,
@@ -143,25 +160,39 @@ function httpsPost(url, headers, body) {
       headers: {
         "user-agent": USER_AGENT,
         ...headers,
+        ...(bodyBuffer && !hasLength ? { "content-length": String(bodyBuffer.length) } : {}),
       },
+      rejectUnauthorized: false, // Required for Gemini API
+      timeout: timeoutMs,
     };
 
     const req = https.request(options, (res) => {
+      if (log) log(`${label}: response ${res.statusCode} ${urlObj.hostname}${urlObj.pathname}`);
       let data = "";
       res.on("data", chunk => data += chunk);
       res.on("end", () => resolve({ status: res.statusCode, headers: res.headers, text: data }));
+      res.on("error", (err) => {
+        if (log) log(`${label}: response error ${err.message}`);
+        reject(err);
+      });
     });
 
-    req.on("error", reject);
-    if (body) req.write(body);
+    req.on("timeout", () => {
+      req.destroy(new Error(`${label}: request timeout after ${timeoutMs}ms`));
+    });
+    req.on("error", (err) => {
+      if (log) log(`${label}: request error ${err.message}`);
+      reject(err);
+    });
+    if (bodyBuffer) req.write(bodyBuffer);
     req.end();
   });
 }
 
-async function fetchWithRedirects(url, headers, maxRedirects = 10, binary = false) {
+async function fetchWithRedirects(url, headers, maxRedirects = 10, binary = false, opts = {}) {
   let current = url;
   for (let i = 0; i <= maxRedirects; i++) {
-    const res = await httpsGet(current, headers, binary);
+    const res = await httpsGet(current, headers, { ...opts, binary, label: opts.label || "httpsGet" });
     if (res.status >= 300 && res.status < 400 && res.headers.location) {
       current = new URL(res.headers.location, current).toString();
       continue;
@@ -175,9 +206,12 @@ async function fetchWithRedirects(url, headers, maxRedirects = 10, binary = fals
 // Gemini API Functions
 // ============================================================================
 
-async function fetchGeminiAccessToken(cookieMap) {
+async function fetchGeminiAccessToken(cookieMap, opts = {}) {
   const cookieHeader = buildCookieHeader(cookieMap);
-  const res = await fetchWithRedirects(GEMINI_APP_URL, { cookie: cookieHeader });
+  const res = await fetchWithRedirects(GEMINI_APP_URL, { cookie: cookieHeader }, 10, false, {
+    ...opts,
+    label: opts.label || "geminiAccessToken",
+  });
   const html = res.text;
 
   const tokens = ["SNlM0e", "thykhd"];
@@ -220,8 +254,7 @@ function extractGgdlUrls(rawText) {
 }
 
 function ensureFullSizeImageUrl(url) {
-  if (url.includes("=s2048")) return url;
-  if (url.includes("=s")) return url;
+  if (url.includes("=s")) return url; // Already has size parameter
   return `${url}=s2048`;
 }
 
@@ -314,7 +347,7 @@ function parseGeminiStreamGenerateResponse(rawText) {
 // File Upload
 // ============================================================================
 
-async function uploadGeminiFile(filePath) {
+async function uploadGeminiFile(filePath, opts = {}) {
   const absPath = path.resolve(process.cwd(), filePath);
   const data = fs.readFileSync(absPath);
   const fileName = path.basename(absPath);
@@ -333,7 +366,7 @@ async function uploadGeminiFile(filePath) {
   const res = await httpsPost(GEMINI_UPLOAD_URL, {
     "content-type": `multipart/form-data; boundary=${boundary}`,
     "push-id": GEMINI_UPLOAD_PUSH_ID,
-  }, body);
+  }, body, { ...opts, label: opts.label || "geminiUpload" });
 
   if (res.status < 200 || res.status >= 300) {
     throw new Error(`File upload failed: ${res.status} (${res.text.slice(0, 200)})`);
@@ -346,12 +379,15 @@ async function uploadGeminiFile(filePath) {
 // Image Download
 // ============================================================================
 
-async function downloadGeminiImage(url, cookieMap, outputPath) {
+async function downloadGeminiImage(url, cookieMap, outputPath, opts = {}) {
   const cookieHeader = buildCookieHeader(cookieMap);
   const fullUrl = ensureFullSizeImageUrl(url);
   
   // Use binary mode for image download
-  const res = await fetchWithRedirects(fullUrl, { cookie: cookieHeader }, 10, true);
+  const res = await fetchWithRedirects(fullUrl, { cookie: cookieHeader }, 10, true, {
+    ...opts,
+    label: opts.label || "geminiImageDownload",
+  });
   
   if (res.status < 200 || res.status >= 300) {
     throw new Error(`Failed to download image: ${res.status}`);
@@ -366,18 +402,18 @@ async function downloadGeminiImage(url, cookieMap, outputPath) {
   fs.writeFileSync(outputPath, res.buffer);
 }
 
-async function saveFirstGeminiImage(output, cookieMap, outputPath) {
+async function saveFirstGeminiImage(output, cookieMap, outputPath, opts = {}) {
   // Try generated or web images first
   const genOrWeb = output.images.find(img => img.kind === "generated") ?? output.images[0];
   if (genOrWeb?.url) {
-    await downloadGeminiImage(genOrWeb.url, cookieMap, outputPath);
+    await downloadGeminiImage(genOrWeb.url, cookieMap, outputPath, opts);
     return { saved: true, imageCount: output.images.length };
   }
 
   // Fall back to gg-dl URLs in raw response
   const ggdl = extractGgdlUrls(output.rawResponseText);
   if (ggdl[0]) {
-    await downloadGeminiImage(ggdl[0], cookieMap, outputPath);
+    await downloadGeminiImage(ggdl[0], cookieMap, outputPath, opts);
     return { saved: true, imageCount: ggdl.length };
   }
 
@@ -398,16 +434,16 @@ function buildGeminiFReqPayload(prompt, uploaded, chatMetadata) {
 }
 
 async function runGeminiWebOnce(input) {
-  const { prompt, files, model, cookieMap, chatMetadata } = input;
+  const { prompt, files, model, cookieMap, chatMetadata, timeoutMs = 30000, log = null } = input;
   const cookieHeader = buildCookieHeader(cookieMap);
   
   // 1. Get access token
-  const at = await fetchGeminiAccessToken(cookieMap);
+  const at = await fetchGeminiAccessToken(cookieMap, { timeoutMs, log, label: "geminiAccessToken" });
 
   // 2. Upload files
   const uploaded = [];
   for (const file of files ?? []) {
-    uploaded.push(await uploadGeminiFile(file));
+    uploaded.push(await uploadGeminiFile(file, { timeoutMs, log, label: "geminiUpload" }));
   }
 
   // 3. Build request
@@ -419,12 +455,13 @@ async function runGeminiWebOnce(input) {
   // 4. Send request
   const res = await httpsPost(GEMINI_STREAM_GENERATE_URL, {
     "content-type": "application/x-www-form-urlencoded;charset=utf-8",
+    "host": "gemini.google.com",
     "origin": "https://gemini.google.com",
     "referer": "https://gemini.google.com/",
     "x-same-domain": "1",
     "cookie": cookieHeader,
     [MODEL_HEADER_NAME]: MODEL_HEADERS[model] || MODEL_HEADERS["gemini-3-pro"],
-  }, params.toString());
+  }, params.toString(), { timeoutMs, log, label: "geminiStreamGenerate" });
 
   const rawResponseText = res.text;
   
@@ -496,8 +533,8 @@ async function query(options) {
     output,
     youtube,
     aspectRatio,
-    timeout = 300000,
     getCookies,
+    timeout = 300000,
     log = () => {},
   } = options;
 
@@ -550,6 +587,8 @@ async function query(options) {
         model: resolvedModel,
         cookieMap,
         chatMetadata: null,
+        timeoutMs: timeout,
+        log,
       });
       
       log("Sending edit request...");
@@ -560,13 +599,15 @@ async function query(options) {
         model: resolvedModel,
         cookieMap,
         chatMetadata: intro.metadata,
+        timeoutMs: timeout,
+        log,
       });
 
       response = out;
       
       // Save output image
       const outputPath = output || generateImage || "edited.png";
-      const imageSave = await saveFirstGeminiImage(out, cookieMap, outputPath);
+      const imageSave = await saveFirstGeminiImage(out, cookieMap, outputPath, { timeoutMs: timeout, log });
       if (!imageSave.saved) {
         throw new Error(`No images generated. Response: ${out.text?.slice(0, 200) || "(empty)"}`);
       }
@@ -581,12 +622,14 @@ async function query(options) {
         model: resolvedModel,
         cookieMap,
         chatMetadata: null,
+        timeoutMs: timeout,
+        log,
       });
 
       response = out;
       
       // Save output image
-      const imageSave = await saveFirstGeminiImage(out, cookieMap, generateImage);
+      const imageSave = await saveFirstGeminiImage(out, cookieMap, generateImage, { timeoutMs: timeout, log });
       if (!imageSave.saved) {
         throw new Error(`No images generated. Response: ${out.text?.slice(0, 200) || "(empty)"}`);
       }
@@ -601,6 +644,8 @@ async function query(options) {
         model: resolvedModel,
         cookieMap,
         chatMetadata: null,
+        timeoutMs: timeout,
+        log,
       });
 
       response = out;
