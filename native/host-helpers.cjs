@@ -417,8 +417,17 @@ function formatToolContent(result, log = () => {}) {
 function mapComputerAction(args, tabId) {
   const a = args || {};
   const { action, text, scroll_direction, scroll_amount, 
-          start_coordinate, ref, duration, modifiers } = a;
-  const coordinate = a.coordinate || (a.x !== undefined && a.y !== undefined ? [a.x, a.y] : undefined);
+          ref, duration, modifiers } = a;
+
+  // Parse coordinate values that may arrive as "x,y" strings (from CLI --from/--to/--coordinate)
+  const parseCoord = (v) => {
+    if (Array.isArray(v)) return v.map(Number);
+    if (typeof v === "string" && v.includes(",")) return v.split(",").map(Number);
+    return v;
+  };
+
+  const start_coordinate = parseCoord(a.start_coordinate || a.from);
+  const coordinate = parseCoord(a.coordinate || a.to) || (a.x !== undefined && a.y !== undefined ? [Number(a.x), Number(a.y)] : undefined);
   const baseMsg = { tabId };
   
   if (!action) {
